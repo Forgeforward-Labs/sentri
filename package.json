@@ -1,0 +1,26 @@
+{
+  "name": "sentri-protocol",
+  "private": true,
+  "packageManager": "yarn@4.13.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test",
+    "contracts:compile": "yarn workspace @sentri/contracts compile",
+    "contracts:test": "yarn workspace @sentri/contracts test",
+    "tracker:dev": "yarn workspace @sentri/tracker dev",
+    "web:dev": "yarn workspace @sentri/web dev"
+  },
+  "devDependencies": {
+    "turbo": "^2.9.0",
+    "typescript": "^5.6.3"
+  }
+}
