@@ -10,11 +10,20 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@react-three/drei": "^9.122.0",
+    "@react-three/fiber": "^8.17.10",
     "@sentri/config": "workspace:*",
     "@sentri/shared-types": "workspace:*",
     "@tanstack/react-query": "^5.59.20",
+    "clsx": "^2.1.1",
+    "framer-motion": "^11.15.0",
+    "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-router-dom": "^7.0.2",
+    "sonner": "^2.0.7",
+    "tailwind-merge": "^2.5.4",
+    "three": "^0.170.0",
     "viem": "^2.21.9",
     "wagmi": "^2.12.16"
   },
@@ -22,6 +31,11 @@
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.170.0",
+    "@vitejs/plugin-react": "^4.3.3",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.16",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
   }
