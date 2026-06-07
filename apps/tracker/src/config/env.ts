@@ -22,4 +22,8 @@ export const env = {
   coreAddress: process.env.CORE_ADDRESS ?? "",
   vaultAddress: process.env.VAULT_ADDRESS ?? "",
   agentOrchestratorAddress: process.env.AGENT_ORCHESTRATOR_ADDRESS ?? "",
+
+  get hasContracts() {
+    return Boolean(this.coreAddress && this.vaultAddress);
+  },
 };
