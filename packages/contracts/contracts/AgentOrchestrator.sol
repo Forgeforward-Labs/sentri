@@ -3,6 +3,76 @@ pragma solidity ^0.8.24;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
+// ─────────────────────────────────────────────────────────────────
+//  Somnia Agent Platform — types & interface
+//  Platform address (testnet 50312): 0x037Bb9C718F3f7fe5eCBDB0b600D607b52706776
+//  Platform address (mainnet  5031): 0x5E5205CF39E766118C01636bED000A54D93163E6
+// ─────────────────────────────────────────────────────────────────
+
+enum ConsensusType { Majority, Threshold }
+
+enum ResponseStatus {
+    None,      // 0
+    Pending,   // 1
+    Success,   // 2
+    Failed,    // 3
+    TimedOut   // 4
+}
+
+struct Response {
+    address validator;
+    bytes   result;
+    ResponseStatus status;
+    uint256 receipt;
+    uint256 timestamp;
+    uint256 executionCost;
+}
+
+struct AgentRequest {
+    uint256  id;
+    address  requester;
+    address  callbackAddress;
+    bytes4   callbackSelector;
+    address[] subcommittee;
+    Response[] responses;
+    uint256  responseCount;
+    uint256  failureCount;
+    uint256  threshold;
+    uint256  createdAt;
+    uint256  deadline;
+    ResponseStatus status;
+    ConsensusType  consensusType;
+    uint256  remainingBudget;
+    uint256  perAgentBudget;
+}
+
+interface IAgentPlatform {
+    function createRequest(
+        uint256 agentId,
+        address callbackAddress,
+        bytes4  callbackSelector,
+        bytes   calldata payload
+    ) external payable returns (uint256 requestId);
+
+    function getRequestDeposit() external view returns (uint256);
+}
+
+// Agent method selectors — encode as abi.encodeWithSelector(...)
+interface IJsonApiAgent {
+    // Returns uint256 scaled by `decimals`
+    function fetchUint(string calldata url, string calldata selector, uint8 decimals)
+        external returns (uint256);
+}
+
+interface ILlmAgent {
+    // Returns a free-text string (temperature=0, deterministic)
+    function inferString(string calldata prompt) external returns (string memory);
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  Downstream contract interfaces
+// ─────────────────────────────────────────────────────────────────
+
 interface IInsuranceCoreOrchestrator {
     function setClaimedPrice(uint256 positionId, uint256 confirmedPrice) external;
 }
@@ -11,127 +81,367 @@ interface IClaimProcessorOrchestrator {
     function processClaim(uint256 positionId, uint256 amount) external;
 }
 
+// ─────────────────────────────────────────────────────────────────
+//  AgentOrchestrator
+// ─────────────────────────────────────────────────────────────────
+
 contract AgentOrchestrator is Ownable {
-    address public immutable core;
-    address public immutable claimProcessor;
-    address public somniaAgents;
+    IAgentPlatform public immutable platform;
+    address        public immutable core;
+    address        public immutable claimProcessor;
 
-    mapping(bytes32 => uint256) public requestToPosition;
-    mapping(bytes32 => uint8) public requestToStep;
+    // ── Agent IDs ────────────────────────────────────────────────
+    // Get actual IDs from https://agents.somnia.network, then call setAgentIds().
+    uint256 public jsonApiAgentId;
+    uint256 public llmAgentId;
 
-    event Agent1Called(uint256 indexed positionId, bytes32 indexed requestId);
-    event Agent2Called(uint256 indexed positionId, bytes32 indexed requestId);
-    event Agent3Called(uint256 indexed positionId, bytes32 indexed requestId);
-    event TriggerVerified(uint256 indexed positionId, uint256 confirmedPrice, uint256 payoutAmount);
-    event TriggerDenied(uint256 indexed positionId, string reason, uint8 step);
-    event SomniaAgentsUpdated(address indexed somniaAgents);
+    // ── Cost constants ───────────────────────────────────────────
+    uint256 public constant JSON_COST_PER_AGENT = 0.03 ether; // STT per validator
+    uint256 public constant LLM_COST_PER_AGENT  = 0.07 ether;
+    uint256 public constant SUBCOMMITTEE_SIZE   = 3;
 
+    // ── Per-request state ────────────────────────────────────────
+    mapping(uint256 => uint256) public requestToPosition;
+    mapping(uint256 => uint8)   public requestToStep;       // 1 = price, 2 = LLM, 3 = news
+    mapping(uint256 => uint256) public requestToThreshold;
+    mapping(uint256 => uint256) public requestToCoverage;
+    mapping(uint256 => bool)    public requestIsRug;
+    mapping(uint256 => uint256) public requestConfirmedPrice;
+
+    // ── Events ───────────────────────────────────────────────────
+    event DepegValidationStarted(uint256 indexed positionId, uint256 indexed requestId);
+    event RugValidationStarted  (uint256 indexed positionId, uint256 indexed requestId);
+    event StepAdvanced          (uint256 indexed positionId, uint8 step, uint256 indexed requestId);
+    event TriggerVerified       (uint256 indexed positionId, uint256 confirmedPrice, uint256 payoutAmount);
+    event TriggerDenied         (uint256 indexed positionId, string reason, uint8 step);
+    event AgentIdsUpdated       (uint256 jsonApiAgentId, uint256 llmAgentId);
+
+    // ── Errors ───────────────────────────────────────────────────
     error OnlyCore();
-    error OnlySomniaAgents();
+    error OnlyPlatform();
+    error InsufficientSTT(uint256 required, uint256 available);
 
-    constructor(address coreAddress, address claimProcessorAddress, address somniaAgentsAddress)
-        Ownable(msg.sender)
-    {
-        core = coreAddress;
+    constructor(
+        address platformAddress,
+        address coreAddress,
+        address claimProcessorAddress
+    ) Ownable(msg.sender) {
+        platform       = IAgentPlatform(platformAddress);
+        core           = coreAddress;
         claimProcessor = claimProcessorAddress;
-        somniaAgents = somniaAgentsAddress;
     }
+
+    /// @notice Accept STT rebates from the platform and direct top-ups from owner.
+    receive() external payable {}
 
     modifier onlyCore() {
-        if (msg.sender != core) {
-            revert OnlyCore();
-        }
+        if (msg.sender != core) revert OnlyCore();
         _;
     }
 
-    modifier onlySomniaAgents() {
-        if (msg.sender != somniaAgents) {
-            revert OnlySomniaAgents();
-        }
+    modifier onlyPlatform() {
+        if (msg.sender != address(platform)) revert OnlyPlatform();
         _;
     }
 
-    function setSomniaAgents(address somniaAgentsAddress) external onlyOwner {
-        somniaAgents = somniaAgentsAddress;
-        emit SomniaAgentsUpdated(somniaAgentsAddress);
+    // ─────────────────────────────────────────────────────────────
+    //  Owner configuration
+    // ─────────────────────────────────────────────────────────────
+
+    /// @notice Set agent IDs after deployment.
+    function setAgentIds(uint256 _jsonApiAgentId, uint256 _llmAgentId) external onlyOwner {
+        jsonApiAgentId = _jsonApiAgentId;
+        llmAgentId     = _llmAgentId;
+        emit AgentIdsUpdated(_jsonApiAgentId, _llmAgentId);
     }
 
-    function startDepegValidation(uint256 positionId, uint256 observedPrice)
-        external
-        onlyCore
-        returns (bytes32 requestId)
-    {
-        requestId = keccak256(abi.encode(positionId, observedPrice, block.timestamp, "DEPEG"));
-        requestToPosition[requestId] = positionId;
-        requestToStep[requestId] = 1;
-
-        emit Agent1Called(positionId, requestId);
+    /// @notice Withdraw unspent STT.
+    function withdraw(uint256 amount) external onlyOwner {
+        payable(owner()).transfer(amount);
     }
 
-    function startRugValidation(uint256 positionId, uint256 observedLiquidityPct)
-        external
-        onlyCore
-        returns (bytes32 requestId)
-    {
-        requestId = keccak256(abi.encode(positionId, observedLiquidityPct, block.timestamp, "RUG"));
-        requestToPosition[requestId] = positionId;
-        requestToStep[requestId] = 1;
+    // ─────────────────────────────────────────────────────────────
+    //  Entry points — called by InsuranceCore (via tracker)
+    // ─────────────────────────────────────────────────────────────
 
-        emit Agent1Called(positionId, requestId);
+    /**
+     * @param positionId     On-chain position ID.
+     * @param observedPrice  Raw price in 18-decimal WAD (e.g. 0.97e18).
+     * @param threshold      Depeg threshold in 18-decimal WAD (e.g. 0.97e18).
+     * @param coverageAmount Coverage in USDC 6-decimal units.
+     */
+    function startDepegValidation(
+        uint256 positionId,
+        uint256 observedPrice,
+        uint256 threshold,
+        uint256 coverageAmount
+    ) external onlyCore {
+        uint256 cost = _jsonApiCost();
+        if (address(this).balance < cost) revert InsufficientSTT(cost, address(this).balance);
+
+        bytes memory payload = abi.encodeWithSelector(
+            IJsonApiAgent.fetchUint.selector,
+            "https://api.coingecko.com/api/v3/simple/price?ids=usd-coin&vs_currencies=usd",
+            "usd-coin.usd",
+            uint8(8)   // 8 decimals → e.g. 97000000 = $0.97
+        );
+
+        uint256 requestId = platform.createRequest{value: cost}(
+            jsonApiAgentId,
+            address(this),
+            this.handlePriceResponse.selector,
+            payload
+        );
+
+        requestToPosition      [requestId] = positionId;
+        requestToStep          [requestId] = 1;
+        requestToThreshold     [requestId] = threshold;
+        requestToCoverage      [requestId] = coverageAmount;
+        requestIsRug           [requestId] = false;
+        requestConfirmedPrice  [requestId] = observedPrice;
+
+        emit DepegValidationStarted(positionId, requestId);
     }
 
-    function agent1Callback(bytes32 requestId, uint256 confirmedPrice, uint256 threshold)
-        external
-        onlySomniaAgents
-    {
+    /**
+     * @param positionId           On-chain position ID.
+     * @param observedLiquidityPct Observed liquidity in basis points (5000 = 50%).
+     * @param threshold            Rug threshold in bps.
+     * @param coverageAmount       Coverage in USDC 6-decimal units.
+     */
+    function startRugValidation(
+        uint256 positionId,
+        uint256 observedLiquidityPct,
+        uint256 threshold,
+        uint256 coverageAmount
+    ) external onlyCore {
+        uint256 cost = _jsonApiCost();
+        if (address(this).balance < cost) revert InsufficientSTT(cost, address(this).balance);
+
+        // Fetch current liquidity from a DeFiLlama-style endpoint.
+        // For the demo we check USDC price as a proxy; replace with real pool API.
+        bytes memory payload = abi.encodeWithSelector(
+            IJsonApiAgent.fetchUint.selector,
+            "https://api.coingecko.com/api/v3/simple/price?ids=usd-coin&vs_currencies=usd",
+            "usd-coin.usd",
+            uint8(8)
+        );
+
+        uint256 requestId = platform.createRequest{value: cost}(
+            jsonApiAgentId,
+            address(this),
+            this.handlePriceResponse.selector,
+            payload
+        );
+
+        requestToPosition      [requestId] = positionId;
+        requestToStep          [requestId] = 1;
+        requestToThreshold     [requestId] = threshold;
+        requestToCoverage      [requestId] = coverageAmount;
+        requestIsRug           [requestId] = true;
+        // Store the observed liquidity pct so handlePriceResponse can compare it.
+        requestConfirmedPrice  [requestId] = observedLiquidityPct;
+
+        emit RugValidationStarted(positionId, requestId);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    //  Step 1 — Price / liquidity verification (JSON API Agent)
+    // ─────────────────────────────────────────────────────────────
+
+    function handlePriceResponse(
+        uint256 requestId,
+        Response[] memory responses,
+        ResponseStatus status,
+        AgentRequest memory /* details */
+    ) external onlyPlatform {
         uint256 positionId = requestToPosition[requestId];
+        uint256 threshold  = requestToThreshold[requestId];
+        uint256 coverage   = requestToCoverage[requestId];
+        bool    isRug      = requestIsRug[requestId];
 
-        if (confirmedPrice >= threshold) {
-            emit TriggerDenied(positionId, "Agent 1 denied trigger", 1);
+        if (status != ResponseStatus.Success || responses.length == 0) {
+            emit TriggerDenied(positionId, "Agent 1: price fetch failed", 1);
             _clearRequest(requestId);
             return;
         }
 
-        IInsuranceCoreOrchestrator(core).setClaimedPrice(positionId, confirmedPrice);
-        requestToStep[requestId] = 2;
-        emit Agent2Called(positionId, requestId);
-    }
+        // fetchUint returns 8-decimal price: 97000000 = $0.97
+        uint256 priceE8 = abi.decode(responses[0].result, (uint256));
 
-    function agent2Callback(bytes32 requestId, bool valid, string calldata reason)
-        external
-        onlySomniaAgents
-    {
-        uint256 positionId = requestToPosition[requestId];
+        bool triggered;
+        uint256 confirmedValue;
 
-        if (!valid) {
-            emit TriggerDenied(positionId, reason, 2);
+        if (isRug) {
+            // For rug checks we compare the observed liquidity pct (stored in requestConfirmedPrice)
+            uint256 observedPct = requestConfirmedPrice[requestId];
+            triggered      = observedPct < threshold;
+            confirmedValue = observedPct;
+        } else {
+            // Convert 8-decimal to 18-decimal WAD for comparison
+            uint256 priceWad = priceE8 * 1e10;
+            triggered      = priceWad < threshold;
+            confirmedValue = priceWad;
+            if (triggered) {
+                IInsuranceCoreOrchestrator(core).setClaimedPrice(positionId, priceWad);
+            }
+        }
+
+        if (!triggered) {
+            emit TriggerDenied(positionId, "Agent 1: value above threshold", 1);
             _clearRequest(requestId);
             return;
         }
 
-        requestToStep[requestId] = 3;
-        emit Agent3Called(positionId, requestId);
+        // Price confirmed — advance to LLM classification (step 2)
+        emit StepAdvanced(positionId, 2, requestId);
+        _callLlm(requestId, positionId, coverage, threshold, isRug, confirmedValue, true);
     }
 
-    function agent3Callback(bytes32 requestId, bool confirmed, uint256 payoutAmount, string calldata reason)
-        external
-        onlySomniaAgents
-    {
-        uint256 positionId = requestToPosition[requestId];
+    // ─────────────────────────────────────────────────────────────
+    //  Step 2 — LLM classification (LLM Inference Agent)
+    // ─────────────────────────────────────────────────────────────
 
-        if (!confirmed) {
-            emit TriggerDenied(positionId, reason, 3);
+    function _callLlm(
+        uint256 prevRequestId,
+        uint256 positionId,
+        uint256 coverage,
+        uint256 threshold,
+        bool    isRug,
+        uint256 confirmedValue,
+        bool    isStep2
+    ) internal {
+        uint256 cost = _llmCost();
+        if (address(this).balance < cost) {
+            emit TriggerDenied(positionId, "Insufficient STT for LLM agent", isStep2 ? 2 : 3);
+            _clearRequest(prevRequestId);
+            return;
+        }
+
+        string memory prompt;
+        if (isStep2) {
+            prompt = isRug
+                ? "A DeFi liquidity pool has experienced a sudden significant liquidity drop below its configured safety threshold, consistent with developer wallet draining or rug-pull patterns. Is this a genuine rug pull event? Reply YES or NO only."
+                : "USDC has dropped below its $0.97 peg according to live CoinGecko data. Is this a genuine sustained depeg event rather than a transient data glitch or rounding error? Reply YES or NO only.";
+        } else {
+            prompt = isRug
+                ? "Search for very recent news (past 24 hours) about DeFi rug pulls, exit scams, or sudden liquidity removal events. Are there credible reports corroborating a current rug pull? Reply YES or NO only."
+                : "Search for very recent news (past 24 hours) about USDC depegging, Circle financial problems, or stablecoin instability. Are there credible reports corroborating a USDC depeg event? Reply YES or NO only.";
+        }
+
+        bytes memory payload = abi.encodeWithSelector(
+            ILlmAgent.inferString.selector,
+            prompt
+        );
+
+        uint256 newRequestId = platform.createRequest{value: cost}(
+            llmAgentId,
+            address(this),
+            isStep2 ? this.handleLlmResponse.selector : this.handleNewsResponse.selector,
+            payload
+        );
+
+        requestToPosition     [newRequestId] = positionId;
+        requestToStep         [newRequestId] = isStep2 ? 2 : 3;
+        requestToCoverage     [newRequestId] = coverage;
+        requestToThreshold    [newRequestId] = threshold;
+        requestIsRug          [newRequestId] = isRug;
+        requestConfirmedPrice [newRequestId] = confirmedValue;
+
+        _clearRequest(prevRequestId);
+    }
+
+    function handleLlmResponse(
+        uint256 requestId,
+        Response[] memory responses,
+        ResponseStatus status,
+        AgentRequest memory /* details */
+    ) external onlyPlatform {
+        uint256 positionId     = requestToPosition[requestId];
+        uint256 coverage       = requestToCoverage[requestId];
+        uint256 threshold      = requestToThreshold[requestId];
+        bool    isRug          = requestIsRug[requestId];
+        uint256 confirmedValue = requestConfirmedPrice[requestId];
+
+        if (status != ResponseStatus.Success || responses.length == 0) {
+            emit TriggerDenied(positionId, "Agent 2: LLM failed", 2);
             _clearRequest(requestId);
             return;
         }
 
-        IClaimProcessorOrchestrator(claimProcessor).processClaim(positionId, payoutAmount);
-        emit TriggerVerified(positionId, 0, payoutAmount);
+        string memory answer = abi.decode(responses[0].result, (string));
+        if (!_startsWith(answer, "YES")) {
+            emit TriggerDenied(positionId, answer, 2);
+            _clearRequest(requestId);
+            return;
+        }
+
+        // LLM confirmed — advance to news verification (step 3)
+        emit StepAdvanced(positionId, 3, requestId);
+        _callLlm(requestId, positionId, coverage, threshold, isRug, confirmedValue, false);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    //  Step 3 — News / social verification (LLM Inference Agent)
+    // ─────────────────────────────────────────────────────────────
+
+    function handleNewsResponse(
+        uint256 requestId,
+        Response[] memory responses,
+        ResponseStatus status,
+        AgentRequest memory /* details */
+    ) external onlyPlatform {
+        uint256 positionId     = requestToPosition[requestId];
+        uint256 coverage       = requestToCoverage[requestId];
+        uint256 confirmedPrice = requestConfirmedPrice[requestId];
+
+        if (status != ResponseStatus.Success || responses.length == 0) {
+            emit TriggerDenied(positionId, "Agent 3: news check failed", 3);
+            _clearRequest(requestId);
+            return;
+        }
+
+        string memory answer = abi.decode(responses[0].result, (string));
+        if (!_startsWith(answer, "YES")) {
+            emit TriggerDenied(positionId, answer, 3);
+            _clearRequest(requestId);
+            return;
+        }
+
+        // All 3 agents confirmed — trigger payout
+        IClaimProcessorOrchestrator(claimProcessor).processClaim(positionId, coverage);
+        emit TriggerVerified(positionId, confirmedPrice, coverage);
         _clearRequest(requestId);
     }
 
-    function _clearRequest(bytes32 requestId) internal {
-        delete requestToPosition[requestId];
-        delete requestToStep[requestId];
+    // ─────────────────────────────────────────────────────────────
+    //  Helpers
+    // ─────────────────────────────────────────────────────────────
+
+    function _jsonApiCost() internal view returns (uint256) {
+        return platform.getRequestDeposit() + JSON_COST_PER_AGENT * SUBCOMMITTEE_SIZE;
+    }
+
+    function _llmCost() internal view returns (uint256) {
+        return platform.getRequestDeposit() + LLM_COST_PER_AGENT * SUBCOMMITTEE_SIZE;
+    }
+
+    function _clearRequest(uint256 requestId) internal {
+        delete requestToPosition     [requestId];
+        delete requestToStep         [requestId];
+        delete requestToThreshold    [requestId];
+        delete requestToCoverage     [requestId];
+        delete requestIsRug          [requestId];
+        delete requestConfirmedPrice [requestId];
+    }
+
+    function _startsWith(string memory str, string memory prefix) internal pure returns (bool) {
+        bytes memory s = bytes(str);
+        bytes memory p = bytes(prefix);
+        if (s.length < p.length) return false;
+        for (uint256 i = 0; i < p.length; i++) {
+            if (s[i] != p[i]) return false;
+        }
+        return true;
     }
 }

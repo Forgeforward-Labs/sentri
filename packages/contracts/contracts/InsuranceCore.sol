@@ -11,8 +11,18 @@ interface IPolicyVaultCore {
 }
 
 interface IAgentOrchestratorCore {
-    function startDepegValidation(uint256 positionId, uint256 observedPrice) external returns (bytes32);
-    function startRugValidation(uint256 positionId, uint256 observedLiquidityPct) external returns (bytes32);
+    function startDepegValidation(
+        uint256 positionId,
+        uint256 observedPrice,
+        uint256 threshold,
+        uint256 coverageAmount
+    ) external;
+    function startRugValidation(
+        uint256 positionId,
+        uint256 observedLiquidityPct,
+        uint256 threshold,
+        uint256 coverageAmount
+    ) external;
 }
 
 contract InsuranceCore is Ownable {
@@ -262,7 +272,17 @@ contract InsuranceCore is Ownable {
             revert PositionStateInvalid();
         }
 
-        IAgentOrchestratorCore(agentOrchestrator).startDepegValidation(positionId, observedPrice);
+        DepegParams memory params = abi.decode(
+            products[position.productId].triggerParams,
+            (DepegParams)
+        );
+
+        IAgentOrchestratorCore(agentOrchestrator).startDepegValidation(
+            positionId,
+            observedPrice,
+            params.threshold,
+            position.coverageAmount
+        );
     }
 
     function initiateRugClaim(uint256 positionId, uint256 observedLiquidityPct) external onlyTracker {
@@ -271,7 +291,17 @@ contract InsuranceCore is Ownable {
             revert PositionStateInvalid();
         }
 
-        IAgentOrchestratorCore(agentOrchestrator).startRugValidation(positionId, observedLiquidityPct);
+        RugParams memory params = abi.decode(
+            products[position.productId].triggerParams,
+            (RugParams)
+        );
+
+        IAgentOrchestratorCore(agentOrchestrator).startRugValidation(
+            positionId,
+            observedLiquidityPct,
+            params.liquidityThreshold,
+            position.coverageAmount
+        );
     }
 
     function markClaimed(uint256 positionId, uint256 payout) external onlyClaimProcessor {
