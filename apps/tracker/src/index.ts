@@ -37,59 +37,24 @@ async function bootstrap() {
       // Phase 1 — restore from DB (instant, no chain calls)
       await positionService.initFromDb();
 
-      // Phase 2 — sync new events from chain
-      const chainStats = await contractService.getPoolStats();
+      // Phase 2 — sync current chain state via count-based reads.
+      // This is reliable regardless of DEPLOY_BLOCK: reads every product and
+      // position by ID so nothing is missed even if events predate DEPLOY_BLOCK.
+      const [chainProducts, chainPositions, chainStats, currentBlock] = await Promise.all([
+        contractService.getAllProducts(),
+        contractService.getAllPositions(),
+        contractService.getPoolStats(),
+        contractService.getBlockNumber(),
+      ]);
 
-      if (env.deployBlock !== undefined) {
-        // Event-based indexing: chunk getLogs into 999-block batches
-        const lastIndexed = await databaseService.getLastIndexedBlock();
-        console.info(
-          lastIndexed !== null
-            ? `[tracker] resuming from block ${lastIndexed}`
-            : `[tracker] first run — indexing from deploy block ${env.deployBlock}`,
-        );
-        const fromBlock = lastIndexed !== null ? lastIndexed + 1n : env.deployBlock;
-        const toBlock = await contractService.getBlockNumber();
+      await positionService.initFromChain(chainProducts, chainPositions, chainStats);
+      await databaseService.setLastIndexedBlock(currentBlock);
 
-        if (fromBlock <= toBlock) {
-          console.info(`[tracker] indexing events from block ${fromBlock} to ${toBlock}...`);
-
-          const [newProductIds, newPositionIds, changedPositionIds] = await Promise.all([
-            contractService.getProductIdsInRange(fromBlock, toBlock),
-            contractService.getPositionIdsInRange(fromBlock, toBlock),
-            contractService.getPositionStatusChangesInRange(fromBlock, toBlock),
-          ]);
-
-          const allPositionIds = [...new Set([...newPositionIds, ...changedPositionIds])];
-
-          const [newProducts, newPositions] = await Promise.all([
-            Promise.all(newProductIds.map((id) => contractService.getProduct(id).catch(() => null))),
-            Promise.all(allPositionIds.map((id) => contractService.getPosition(id).catch(() => null))),
-          ]);
-
-          await positionService.initFromChain(
-            newProducts.filter((p): p is Awaited<ReturnType<typeof contractService.getProduct>> => p !== null),
-            newPositions.filter((p): p is Awaited<ReturnType<typeof contractService.getPosition>> => p !== null),
-            chainStats,
-          );
-
-          await databaseService.setLastIndexedBlock(toBlock);
-          console.info(
-            `[tracker] indexed up to block ${toBlock} ` +
-            `(${newProductIds.length} products, ${allPositionIds.length} positions)`,
-          );
-        } else {
-          positionService.applyChainStats(chainStats);
-          console.info(`[tracker] already up to date at block ${lastIndexed}`);
-        }
-      } else {
-        // Fallback: count-based parallel reads (no DEPLOY_BLOCK configured)
-        const [chainProducts, chainPositions] = await Promise.all([
-          contractService.getAllProducts(),
-          contractService.getAllPositions(),
-        ]);
-        await positionService.initFromChain(chainProducts, chainPositions, chainStats);
-      }
+      console.info(
+        `[tracker] startup sync complete — ` +
+        `${chainProducts.length} products, ${chainPositions.length} positions, ` +
+        `lastIndexedBlock=${currentBlock}`,
+      );
 
       // ── Live event poller ─────────────────────────────────────────
       // Polls every 15 s using getLogsChunked (proven reliable) instead of
