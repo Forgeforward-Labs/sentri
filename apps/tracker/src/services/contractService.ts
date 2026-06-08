@@ -288,6 +288,21 @@ export class ContractService {
     return [...new Set(logs.map((l) => Number(l.args.id as bigint)))];
   }
 
+  /** Returns position IDs that had a status change (expired or claimed) in [fromBlock, toBlock]. */
+  async getPositionStatusChangesInRange(fromBlock: bigint, toBlock: bigint): Promise<number[]> {
+    if (!env.coreAddress) return [];
+    const addr = env.coreAddress as `0x${string}`;
+    const expiredEvent = parseAbiItem("event PositionExpired(uint256 indexed id)") as AbiEvent;
+    const claimedEvent = parseAbiItem(
+      "event PositionClaimed(uint256 indexed id, uint256 payout, uint256 confirmedPrice)",
+    ) as AbiEvent;
+    const [expiredLogs, claimedLogs] = await Promise.all([
+      this.getLogsChunked(addr, expiredEvent, fromBlock, toBlock),
+      this.getLogsChunked(addr, claimedEvent, fromBlock, toBlock),
+    ]);
+    return [...new Set([...expiredLogs, ...claimedLogs].map((l) => Number(l.args.id as bigint)))];
+  }
+
   // ── Reads ───────────────────────────────────────────────────────
 
   async getProductCount(): Promise<number> {

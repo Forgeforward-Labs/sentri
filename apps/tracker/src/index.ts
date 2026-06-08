@@ -80,54 +80,65 @@ async function bootstrap() {
         await positionService.initFromChain(chainProducts, chainPositions, chainStats);
       }
 
-      // Refresh pool stats every minute
-      setInterval(async () => {
-        try {
-          const stats = await contractService.getPoolStats();
-          positionService.applyChainStats(stats);
-        } catch {
-          /* ignore */
-        }
-      }, 60_000);
+      // ── Live event poller ─────────────────────────────────────────
+      // Polls every 15 s using getLogsChunked (proven reliable) instead of
+      // watchContractEvent which silently drops events on RPC errors.
+      if (env.deployBlock !== undefined) {
+        let isPolling = false;
 
-      // Watch for new products
-      contractService.watchProductCreated(async (productId) => {
-        try {
-          const product = await contractService.getProduct(productId);
-          positionService.applyChainProduct(product);
-        } catch {
-          /* ignore */
-        }
-      });
-
-      // Watch for new / updated positions
-      contractService.watchPositionCreated(async (positionId) => {
-        try {
-          const pos = await contractService.getPosition(positionId);
-          positionService.applyChainPosition(pos);
-        } catch {
-          /* ignore */
-        }
-      });
-
-      contractService.watchPositionStatusChange(
-        async (positionId) => {
+        const poll = async () => {
+          if (isPolling) return;
+          isPolling = true;
           try {
-            const pos = await contractService.getPosition(positionId);
-            positionService.applyChainPosition(pos);
-          } catch {
-            /* ignore */
+            const lastIndexed = await databaseService.getLastIndexedBlock();
+            if (lastIndexed === null) return; // startup indexing not yet done
+
+            const fromBlock = lastIndexed + 1n;
+            const toBlock = await contractService.getBlockNumber();
+            if (fromBlock > toBlock) return;
+
+            const [newProductIds, newPositionIds, changedPositionIds, chainStats] =
+              await Promise.all([
+                contractService.getProductIdsInRange(fromBlock, toBlock),
+                contractService.getPositionIdsInRange(fromBlock, toBlock),
+                contractService.getPositionStatusChangesInRange(fromBlock, toBlock),
+                contractService.getPoolStats(),
+              ]);
+
+            const allPositionIds = [
+              ...new Set([...newPositionIds, ...changedPositionIds]),
+            ];
+
+            const [newProducts, updatedPositions] = await Promise.all([
+              Promise.all(
+                newProductIds.map((id) => contractService.getProduct(id).catch(() => null)),
+              ),
+              Promise.all(
+                allPositionIds.map((id) => contractService.getPosition(id).catch(() => null)),
+              ),
+            ]);
+
+            for (const p of newProducts) if (p) positionService.applyChainProduct(p);
+            for (const p of updatedPositions) if (p) positionService.applyChainPosition(p);
+            positionService.applyChainStats(chainStats);
+
+            await databaseService.setLastIndexedBlock(toBlock);
+
+            if (newProductIds.length > 0 || allPositionIds.length > 0) {
+              console.info(
+                `[tracker] polled blocks ${fromBlock}–${toBlock}: ` +
+                `${newProductIds.length} new products, ${allPositionIds.length} position updates`,
+              );
+            }
+          } catch (err) {
+            console.error("[tracker] poll error:", err);
+          } finally {
+            isPolling = false;
           }
-        },
-        async (positionId) => {
-          try {
-            const pos = await contractService.getPosition(positionId);
-            positionService.applyChainPosition(pos);
-          } catch {
-            /* ignore */
-          }
-        },
-      );
+        };
+
+        setInterval(poll, 15_000);
+      }
 
       // Watch orchestrator for real agent logs
       contractService.watchOrchestratorEvents({
