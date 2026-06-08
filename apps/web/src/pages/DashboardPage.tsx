@@ -3,10 +3,11 @@ import { Link } from 'react-router-dom'
 import { useAccount } from 'wagmi'
 import type { Position } from '@sentri/shared-types'
 import StatusBadge from '../components/StatusBadge'
+import AgentLogTimeline from '../components/AgentLogTimeline'
 import { formatUsd, formatDate, timeUntil, cn } from '../lib/utils'
-import { usePositions, useProducts } from '../lib/useTrackerData'
+import { useChainPositions, useProducts, useAgentLogs } from '../lib/useTrackerData'
 
-type TabType = 'active' | 'history'
+type TabType = 'active' | 'history' | 'activity'
 
 function PositionCard({ position, products }: { position: Position; products: ReturnType<typeof useProducts>['data'] }) {
   const product = (products ?? []).find((p) => p.id === position.productId)
@@ -73,16 +74,18 @@ function PositionCard({ position, products }: { position: Position; products: Re
   )
 }
 
+const TAB_LABELS: Record<TabType, string> = {
+  active: 'Active',
+  history: 'History',
+  activity: 'Agent Activity',
+}
+
 export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<TabType>('active')
   const { address } = useAccount()
-  const { data: allPositions } = usePositions()
+  const { data: myPositions, isLoading } = useChainPositions(address)
   const { data: products } = useProducts()
-
-  // Show positions belonging to connected wallet (or all if not connected)
-  const myPositions = (allPositions ?? []).filter((p) =>
-    !address || p.holder.toLowerCase() === address.toLowerCase()
-  )
+  const { data: agentLogs = [], isLoading: logsLoading } = useAgentLogs(100)
 
   const filtered = myPositions.filter((p) =>
     activeTab === 'active'
@@ -100,46 +103,70 @@ export default function DashboardPage() {
 
       {/* Tab bar */}
       <div className="flex gap-1 p-1 bg-slate-900 border border-slate-800 rounded-xl w-fit mb-8">
-        {(['active', 'history'] as TabType[]).map((tab) => (
+        {(Object.keys(TAB_LABELS) as TabType[]).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
             className={cn(
-              'px-5 py-2 rounded-lg text-sm font-medium capitalize transition-all',
+              'px-5 py-2 rounded-lg text-sm font-medium transition-all',
               activeTab === tab
                 ? 'bg-brand-500 text-black shadow'
                 : 'text-slate-400 hover:text-slate-200'
             )}
           >
-            {tab === 'active' ? 'Active' : 'History'}
+            {TAB_LABELS[tab]}
+            {tab === 'activity' && agentLogs.length > 0 && (
+              <span className="ml-2 bg-brand-500/20 text-brand-400 text-xs px-1.5 py-0.5 rounded-full">
+                {agentLogs.length}
+              </span>
+            )}
           </button>
         ))}
       </div>
 
+      {/* Activity tab */}
+      {activeTab === 'activity' && (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-3xl">
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="text-white font-semibold">Agent Activity</h2>
+            <span className="text-slate-500 text-xs">Auto-refreshes every 10s</span>
+          </div>
+          {logsLoading ? (
+            <p className="text-slate-500 text-sm text-center py-8">Loading activity…</p>
+          ) : (
+            <AgentLogTimeline logs={agentLogs} />
+          )}
+        </div>
+      )}
+
       {/* Position grid */}
-      {filtered.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filtered.map((position) => (
-            <PositionCard key={position.id} position={position} products={products} />
-          ))}
-        </div>
-      ) : (
-        <div className="text-center py-20 text-slate-500">
-          <p className="text-lg mb-2">No positions found.</p>
-          <p className="text-sm">
-            {activeTab === 'active' ? (
-              <>
-                Get started by{' '}
-                <Link to="/cover" className="text-brand-400 hover:text-brand-300">
-                  buying coverage
-                </Link>
-                .
-              </>
-            ) : (
-              'Your completed positions will appear here.'
-            )}
-          </p>
-        </div>
+      {activeTab !== 'activity' && (
+        isLoading ? (
+          <div className="text-center py-20 text-slate-500 text-sm">Loading positions…</div>
+        ) : filtered.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filtered.map((position) => (
+              <PositionCard key={position.id} position={position} products={products} />
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-20 text-slate-500">
+            <p className="text-lg mb-2">No positions found.</p>
+            <p className="text-sm">
+              {activeTab === 'active' ? (
+                <>
+                  Get started by{' '}
+                  <Link to="/cover" className="text-brand-400 hover:text-brand-300">
+                    buying coverage
+                  </Link>
+                  .
+                </>
+              ) : (
+                'Your completed positions will appear here.'
+              )}
+            </p>
+          </div>
+        )
       )}
     </div>
   )
