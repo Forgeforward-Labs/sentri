@@ -23,6 +23,10 @@ export const env = {
   vaultAddress: process.env.VAULT_ADDRESS ?? "",
   agentOrchestratorAddress: process.env.AGENT_ORCHESTRATOR_ADDRESS ?? "",
 
+  databaseUrl: process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/sentri",
+
+  deployBlock: process.env.DEPLOY_BLOCK ? BigInt(process.env.DEPLOY_BLOCK) : undefined,
+
   get hasContracts() {
     return Boolean(this.coreAddress && this.vaultAddress);
   },

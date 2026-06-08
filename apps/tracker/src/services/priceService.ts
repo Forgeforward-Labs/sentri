@@ -27,6 +27,8 @@ export async function getUsdcPriceUsd() {
       timeout: 10_000,
     });
 
+    console.log("response: ", response.data);
+
     cache.value = response.data["usd-coin"]?.usd ?? null;
     cache.expiresAt = now + 30_000;
 

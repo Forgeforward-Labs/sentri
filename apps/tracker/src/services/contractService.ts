@@ -2,6 +2,8 @@ import {
   createPublicClient,
   createWalletClient,
   http,
+  parseAbiItem,
+  type AbiEvent,
   type Hash,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -26,8 +28,12 @@ const INSURANCE_CORE_ABI = [
     inputs: [{ name: "positionId", type: "uint256" }], outputs: [] },
   { name: "initiateDepegClaim", type: "function", stateMutability: "nonpayable",
     inputs: [{ name: "positionId", type: "uint256" }, { name: "observedPrice", type: "uint256" }], outputs: [] },
+  { name: "initiateDepegClaimBatch", type: "function", stateMutability: "nonpayable",
+    inputs: [{ name: "positionIds", type: "uint256[]" }, { name: "observedPrice", type: "uint256" }], outputs: [] },
   { name: "initiateRugClaim",  type: "function", stateMutability: "nonpayable",
     inputs: [{ name: "positionId", type: "uint256" }, { name: "observedLiquidityPct", type: "uint256" }], outputs: [] },
+  { name: "initiateRugClaimBatch", type: "function", stateMutability: "nonpayable",
+    inputs: [{ name: "positionIds", type: "uint256[]" }, { name: "observedLiquidityPct", type: "uint256" }], outputs: [] },
   { name: "pauseProduct",      type: "function", stateMutability: "nonpayable",
     inputs: [{ name: "productId", type: "uint256" }, { name: "reason", type: "string" }], outputs: [] },
   // Read
@@ -73,6 +79,13 @@ const INSURANCE_CORE_ABI = [
     }],
   },
   // Events
+  { name: "ProductCreated", type: "event",
+    inputs: [
+      { name: "id",          type: "uint256", indexed: true  },
+      { name: "name",        type: "string",  indexed: false },
+      { name: "triggerType", type: "uint8",   indexed: false },
+    ],
+  },
   { name: "PositionCreated", type: "event",
     inputs: [
       { name: "id",             type: "uint256", indexed: true  },
@@ -104,38 +117,33 @@ const POLICY_VAULT_ABI = [
 ] as const;
 
 const ORCHESTRATOR_ABI = [
-  // Agent pipeline events
-  { name: "DepegValidationStarted", type: "event",
+  // Agent pipeline events — updated for batch contract
+  { name: "BatchValidationStarted", type: "event",
     inputs: [
-      { name: "positionId", type: "uint256", indexed: true },
-      { name: "requestId",  type: "uint256", indexed: true },
-    ],
-  },
-  { name: "RugValidationStarted", type: "event",
-    inputs: [
-      { name: "positionId", type: "uint256", indexed: true },
-      { name: "requestId",  type: "uint256", indexed: true },
+      { name: "firstPositionId", type: "uint256", indexed: true  },
+      { name: "batchSize",       type: "uint256", indexed: false },
+      { name: "requestId",       type: "uint256", indexed: true  },
     ],
   },
   { name: "StepAdvanced", type: "event",
     inputs: [
-      { name: "positionId", type: "uint256", indexed: true },
-      { name: "step",       type: "uint8",   indexed: false },
-      { name: "requestId",  type: "uint256", indexed: true },
+      { name: "firstPositionId", type: "uint256", indexed: true  },
+      { name: "step",            type: "uint8",   indexed: false },
+      { name: "requestId",       type: "uint256", indexed: true  },
     ],
   },
   { name: "TriggerVerified", type: "event",
     inputs: [
-      { name: "positionId",    type: "uint256", indexed: true  },
+      { name: "positionId",     type: "uint256", indexed: true  },
       { name: "confirmedPrice", type: "uint256", indexed: false },
-      { name: "payoutAmount",  type: "uint256", indexed: false },
+      { name: "payoutAmount",   type: "uint256", indexed: false },
     ],
   },
   { name: "TriggerDenied", type: "event",
     inputs: [
-      { name: "positionId", type: "uint256", indexed: true  },
-      { name: "reason",     type: "string",  indexed: false },
-      { name: "step",       type: "uint8",   indexed: false },
+      { name: "firstPositionId", type: "uint256", indexed: true  },
+      { name: "reason",          type: "string",  indexed: false },
+      { name: "step",            type: "uint8",   indexed: false },
     ],
   },
 ] as const;
@@ -223,6 +231,63 @@ export class ContractService {
     }
   }
 
+  // ── Helpers ─────────────────────────────────────────────────────
+
+  async getBlockNumber(): Promise<bigint> {
+    return this.publicClient.getBlockNumber();
+  }
+
+  /**
+   * Fetches all logs for a single event over an arbitrary block range by
+   * splitting it into 999-block chunks (Somnia RPC limit).
+   * Chunks are fetched sequentially to avoid overwhelming the RPC.
+   */
+  private async getLogsChunked(
+    address: `0x${string}`,
+    event: AbiEvent,
+    fromBlock: bigint,
+    toBlock: bigint,
+  ): Promise<Array<{ args: Record<string, unknown> }>> {
+    const CHUNK = 999n;
+    const all: Array<{ args: Record<string, unknown> }> = [];
+
+    let chunkCount = 0;
+    for (let from = fromBlock; from <= toBlock; from += CHUNK + 1n) {
+      const to = from + CHUNK > toBlock ? toBlock : from + CHUNK;
+      const logs = await withRetry(() =>
+        this.publicClient.getLogs({ address, event, fromBlock: from, toBlock: to }),
+      );
+      all.push(...(logs as Array<{ args: Record<string, unknown> }>));
+      chunkCount++;
+    }
+
+    if (chunkCount > 1) {
+      console.info(`[contract] getLogs chunked: ${chunkCount} chunks, ${all.length} total logs`);
+    }
+
+    return all;
+  }
+
+  /** Returns unique product IDs emitted in [fromBlock, toBlock]. */
+  async getProductIdsInRange(fromBlock: bigint, toBlock: bigint): Promise<number[]> {
+    if (!env.coreAddress) return [];
+    const event = parseAbiItem(
+      "event ProductCreated(uint256 indexed id, string name, uint8 triggerType)",
+    ) as AbiEvent;
+    const logs = await this.getLogsChunked(env.coreAddress as `0x${string}`, event, fromBlock, toBlock);
+    return [...new Set(logs.map((l) => Number(l.args.id as bigint)))];
+  }
+
+  /** Returns unique position IDs emitted in [fromBlock, toBlock]. */
+  async getPositionIdsInRange(fromBlock: bigint, toBlock: bigint): Promise<number[]> {
+    if (!env.coreAddress) return [];
+    const event = parseAbiItem(
+      "event PositionCreated(uint256 indexed id, address indexed holder, uint256 indexed productId, uint256 coverageAmount)",
+    ) as AbiEvent;
+    const logs = await this.getLogsChunked(env.coreAddress as `0x${string}`, event, fromBlock, toBlock);
+    return [...new Set(logs.map((l) => Number(l.args.id as bigint)))];
+  }
+
   // ── Reads ───────────────────────────────────────────────────────
 
   async getProductCount(): Promise<number> {
@@ -269,15 +334,9 @@ export class ContractService {
 
   async getAllProducts(): Promise<ChainProduct[]> {
     const count = await this.getProductCount();
-    const products: ChainProduct[] = [];
-    for (let i = 1; i <= count; i++) {
-      try {
-        products.push(await this.getProduct(i));
-      } catch {
-        // skip
-      }
-    }
-    return products;
+    const ids = Array.from({ length: count }, (_, i) => i + 1);
+    const results = await Promise.all(ids.map((id) => this.getProduct(id).catch(() => null)));
+    return results.filter((p): p is ChainProduct => p !== null);
   }
 
   async getPosition(id: number): Promise<ChainPosition> {
@@ -303,15 +362,9 @@ export class ContractService {
 
   async getAllPositions(): Promise<ChainPosition[]> {
     const count = await this.getPositionCount();
-    const positions: ChainPosition[] = [];
-    for (let i = 1; i <= count; i++) {
-      try {
-        positions.push(await this.getPosition(i));
-      } catch {
-        // skip
-      }
-    }
-    return positions;
+    const ids = Array.from({ length: count }, (_, i) => i + 1);
+    const results = await Promise.all(ids.map((id) => this.getPosition(id).catch(() => null)));
+    return results.filter((p): p is ChainPosition => p !== null);
   }
 
   async getPoolStats(): Promise<ChainPoolStats> {
@@ -328,6 +381,16 @@ export class ContractService {
   }
 
   // ── Event subscriptions ─────────────────────────────────────────
+
+  watchProductCreated(onLog: (productId: number) => void) {
+    if (!env.coreAddress) return () => {};
+    return this.publicClient.watchContractEvent({
+      address: env.coreAddress as `0x${string}`,
+      abi: INSURANCE_CORE_ABI,
+      eventName: "ProductCreated",
+      onLogs: (logs) => { for (const l of logs) onLog(Number(l.args.id)); },
+    });
+  }
 
   watchPositionCreated(
     onLog: (positionId: number, holder: string, productId: number) => void,
@@ -369,44 +432,46 @@ export class ContractService {
   }
 
   watchOrchestratorEvents(handlers: {
-    onDepegStart?:   (positionId: number, requestId: bigint) => void;
-    onRugStart?:     (positionId: number, requestId: bigint) => void;
-    onStep?:         (positionId: number, step: number,  requestId: bigint | number) => void;
-    onVerified?:     (positionId: number, confirmedPrice: bigint, payout: bigint) => void;
-    onDenied?:       (positionId: number, reason: string, step: number) => void;
+    onBatchStart?:   (firstPositionId: number, batchSize: number, requestId: bigint) => void;
+    onStep?:         (firstPositionId: number, step: number, requestId: bigint) => void;
+    onVerified?:     (positionId: number, confirmedPrice: bigint, payout: bigint, txHash: string | null) => void;
+    onDenied?:       (firstPositionId: number, reason: string, step: number) => void;
   }) {
     if (!env.agentOrchestratorAddress) return () => {};
     const addr = env.agentOrchestratorAddress as `0x${string}`;
 
     const unsubs = [
       this.publicClient.watchContractEvent({
-        address: addr, abi: ORCHESTRATOR_ABI, eventName: "DepegValidationStarted",
+        address: addr, abi: ORCHESTRATOR_ABI, eventName: "BatchValidationStarted",
         onLogs: (logs) => {
-          for (const l of logs) handlers.onDepegStart?.(Number(l.args.positionId), l.args.requestId!);
-        },
-      }),
-      this.publicClient.watchContractEvent({
-        address: addr, abi: ORCHESTRATOR_ABI, eventName: "RugValidationStarted",
-        onLogs: (logs) => {
-          for (const l of logs) handlers.onRugStart?.(Number(l.args.positionId), l.args.requestId!);
+          for (const l of logs) handlers.onBatchStart?.(
+            Number(l.args.firstPositionId), Number(l.args.batchSize), l.args.requestId!,
+          );
         },
       }),
       this.publicClient.watchContractEvent({
         address: addr, abi: ORCHESTRATOR_ABI, eventName: "StepAdvanced",
         onLogs: (logs) => {
-          for (const l of logs) handlers.onStep?.(Number(l.args.positionId), Number(l.args.step as bigint | number), l.args.requestId!);
+          for (const l of logs) handlers.onStep?.(
+            Number(l.args.firstPositionId), Number(l.args.step as bigint | number), l.args.requestId!,
+          );
         },
       }),
       this.publicClient.watchContractEvent({
         address: addr, abi: ORCHESTRATOR_ABI, eventName: "TriggerVerified",
         onLogs: (logs) => {
-          for (const l of logs) handlers.onVerified?.(Number(l.args.positionId), l.args.confirmedPrice!, l.args.payoutAmount!);
+          for (const l of logs) handlers.onVerified?.(
+            Number(l.args.positionId), l.args.confirmedPrice!, l.args.payoutAmount!,
+            l.transactionHash ?? null,
+          );
         },
       }),
       this.publicClient.watchContractEvent({
         address: addr, abi: ORCHESTRATOR_ABI, eventName: "TriggerDenied",
         onLogs: (logs) => {
-          for (const l of logs) handlers.onDenied?.(Number(l.args.positionId), l.args.reason!, l.args.step!);
+          for (const l of logs) handlers.onDenied?.(
+            Number(l.args.firstPositionId), l.args.reason!, l.args.step!,
+          );
         },
       }),
     ];
@@ -448,6 +513,20 @@ export class ContractService {
     );
   }
 
+  async initiateDepegClaimBatch(positionIds: number[], priceUsd: number): Promise<Hash> {
+    const observedPrice = BigInt(Math.round(priceUsd * 1e18));
+    console.info(`[contract] initiateDepegClaimBatch([${positionIds.join(",")}], ${priceUsd})`);
+    const wallet = this.requireWallet();
+    return withRetry(() =>
+      wallet.writeContract({
+        address: env.coreAddress as `0x${string}`,
+        abi: INSURANCE_CORE_ABI,
+        functionName: "initiateDepegClaimBatch",
+        args: [positionIds.map(BigInt), observedPrice],
+      }),
+    );
+  }
+
   async initiateRugClaim(positionId: number, liquidityPctBps: number): Promise<Hash> {
     console.info(`[contract] initiateRugClaim(${positionId}, ${liquidityPctBps}bps)`);
     const wallet = this.requireWallet();
@@ -457,6 +536,19 @@ export class ContractService {
         abi: INSURANCE_CORE_ABI,
         functionName: "initiateRugClaim",
         args: [BigInt(positionId), BigInt(liquidityPctBps)],
+      }),
+    );
+  }
+
+  async initiateRugClaimBatch(positionIds: number[], liquidityPctBps: number): Promise<Hash> {
+    console.info(`[contract] initiateRugClaimBatch([${positionIds.join(",")}], ${liquidityPctBps}bps)`);
+    const wallet = this.requireWallet();
+    return withRetry(() =>
+      wallet.writeContract({
+        address: env.coreAddress as `0x${string}`,
+        abi: INSURANCE_CORE_ABI,
+        functionName: "initiateRugClaimBatch",
+        args: [positionIds.map(BigInt), BigInt(liquidityPctBps)],
       }),
     );
   }

@@ -26,30 +26,36 @@ export function startDepegMonitor(
     }
 
     if (price >= DEPEG_THRESHOLD) {
-      // Price healthy — nothing to do
       return;
     }
 
     console.warn(`[monitor:depeg] USDC price ${price} below threshold ${DEPEG_THRESHOLD}`);
 
-    const activePositions = positionService
-      .getPositions()
-      .filter((p) => p.status === "ACTIVE" && p.expiresAt !== null);
-
-    for (const position of activePositions) {
+    // Group active DEPEG positions by productId — one agent run per product
+    const byProduct = new Map<number, number[]>();
+    for (const position of positionService.getPositions()) {
+      if (position.status !== "ACTIVE") continue;
       const product = positionService.getProducts().find((pr) => pr.id === position.productId);
       if (product?.triggerType !== "DEPEG") continue;
 
-      console.info(`[monitor:depeg] initiating depeg claim for position ${position.id}`);
+      const ids = byProduct.get(position.productId) ?? [];
+      ids.push(position.id);
+      byProduct.set(position.productId, ids);
+    }
+
+    for (const [productId, positionIds] of byProduct) {
+      console.info(`[monitor:depeg] initiating batch depeg claim for product ${productId} (${positionIds.length} positions)`);
       try {
-        const tx = await contractService.initiateDepegClaim(position.id, price);
-        positionService.seedHeartbeat(
-          position.id,
-          "Depeg claim initiated",
-          `USDC at ${price} (< ${DEPEG_THRESHOLD}). tx: ${tx}`,
-        );
+        const tx = await contractService.initiateDepegClaimBatch(positionIds, price);
+        for (const id of positionIds) {
+          positionService.seedHeartbeat(
+            id,
+            "Depeg batch claim initiated",
+            `USDC at ${price} (< ${DEPEG_THRESHOLD}). Batch size: ${positionIds.length}. tx: ${tx}`,
+          );
+        }
       } catch (err) {
-        console.error(`[monitor:depeg] failed to initiate claim for position ${position.id}:`, err);
+        console.error(`[monitor:depeg] failed batch claim for product ${productId}:`, err);
       }
     }
   }, POLL_INTERVAL_MS);

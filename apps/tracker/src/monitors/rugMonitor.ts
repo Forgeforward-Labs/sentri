@@ -32,31 +32,43 @@ export function startRugMonitor(
   console.info("[monitor:rug] starting — polling pool liquidity every 90s");
 
   const timer = setInterval(async () => {
-    const activeRugPositions = positionService
-      .getPositions()
-      .filter((p) => p.status === "ACTIVE");
+    // Group active RUG positions by productId — one agent run per product
+    const byProduct = new Map<number, { positionIds: number[]; pool: string; threshold: number }>();
 
-    for (const position of activeRugPositions) {
+    for (const position of positionService.getPositions()) {
+      if (position.status !== "ACTIVE") continue;
       const product = positionService.getProducts().find((pr) => pr.id === position.productId);
       if (product?.triggerType !== "RUG") continue;
 
       const params = product.triggerParams as { pool: string; liquidityThresholdBps: number };
-      const liquidityPct = await getPoolLiquidityPctBps(params.pool);
+      const entry = byProduct.get(position.productId) ?? {
+        positionIds: [],
+        pool: params.pool,
+        threshold: params.liquidityThresholdBps,
+      };
+      entry.positionIds.push(position.id);
+      byProduct.set(position.productId, entry);
+    }
 
+    for (const [productId, { positionIds, pool, threshold }] of byProduct) {
+      const liquidityPct = await getPoolLiquidityPctBps(pool);
       if (liquidityPct === null) continue;
+      if (liquidityPct >= threshold) continue;
 
-      if (liquidityPct < params.liquidityThresholdBps) {
-        console.warn(`[monitor:rug] pool ${params.pool} liquidity ${liquidityPct}bps < threshold ${params.liquidityThresholdBps}bps`);
-        try {
-          const tx = await contractService.initiateRugClaim(position.id, liquidityPct);
+      console.warn(`[monitor:rug] pool ${pool} liquidity ${liquidityPct}bps < threshold ${threshold}bps`);
+      console.info(`[monitor:rug] initiating batch rug claim for product ${productId} (${positionIds.length} positions)`);
+
+      try {
+        const tx = await contractService.initiateRugClaimBatch(positionIds, liquidityPct);
+        for (const id of positionIds) {
           positionService.seedHeartbeat(
-            position.id,
-            "Rug claim initiated",
-            `Pool liquidity ${liquidityPct}bps below threshold ${params.liquidityThresholdBps}bps. tx: ${tx}`,
+            id,
+            "Rug batch claim initiated",
+            `Pool liquidity ${liquidityPct}bps below threshold ${threshold}bps. Batch size: ${positionIds.length}. tx: ${tx}`,
           );
-        } catch (err) {
-          console.error(`[monitor:rug] failed to initiate claim for position ${position.id}:`, err);
         }
+      } catch (err) {
+        console.error(`[monitor:rug] failed batch claim for product ${productId}:`, err);
       }
     }
   }, POLL_INTERVAL_MS);
