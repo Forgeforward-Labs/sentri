@@ -8,6 +8,7 @@ const navLinks = [
   { label: 'Cover', to: '/cover' },
   { label: 'Earn', to: '/earn' },
   { label: 'Positions', to: '/dashboard' },
+  { label: 'Analytics', to: '/analytics' },
 ]
 
 function WalletButton() {

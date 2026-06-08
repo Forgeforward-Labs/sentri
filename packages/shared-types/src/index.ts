@@ -69,3 +69,65 @@ export interface DashboardStat {
   value: string;
   detail: string;
 }
+
+// ── Analytics types ──────────────────────────────────────────────
+
+export interface Participant {
+  address: string;
+  totalCoverageUsd: number;
+  totalPremiumUsd: number;
+  activePositions: number;
+  totalPositions: number;
+  claimedCount: number;
+  totalPayoutUsd: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+/** A claimed position enriched with event metadata. */
+export interface Claim {
+  positionId: number;
+  productId: number;
+  holder: string;
+  coverageUsd: number;
+  payoutUsd: number;
+  confirmedPrice: number | null;
+  claimedAt: string;
+  txHash: string | null;
+}
+
+export interface ProductStats {
+  id: number;
+  name: string;
+  triggerType: TriggerType;
+  activePositions: number;
+  totalPositions: number;
+  totalCoverageUsd: number;
+  totalPremiumUsd: number;
+  totalPayoutsUsd: number;
+  claimCount: number;
+  /** Fraction of positions that resulted in a claim (0–1). */
+  claimRate: number;
+  /** Committed / pool limit (0–1). */
+  utilizationPct: number;
+}
+
+export interface AnalyticsSummary {
+  totalActiveCoverageUsd: number;
+  totalLockedPremiumUsd: number;
+  totalPayoutsUsd: number;
+  totalParticipants: number;
+  totalPositions: number;
+  activePositions: number;
+  claimCount: number;
+  /** Protocol-wide claim rate (0–1). */
+  claimRate: number;
+  productStats: ProductStats[];
+}
+
+export interface PoolSnapshot {
+  timestamp: string;
+  totalDepositedUsd: number;
+  totalLockedUsd: number;
+  utilizationBps: number;
+}

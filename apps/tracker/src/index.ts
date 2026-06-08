@@ -6,10 +6,12 @@ import { startDepegMonitor } from "./monitors/depegMonitor.js";
 import { startExpiryMonitor } from "./monitors/expiryMonitor.js";
 import { startRugMonitor } from "./monitors/rugMonitor.js";
 import { ContractService } from "./services/contractService.js";
+import { DatabaseService } from "./services/databaseService.js";
 import { PositionService } from "./services/positionService.js";
 
 const positionService = new PositionService();
 const contractService = new ContractService();
+const databaseService = new DatabaseService();
 
 // ── HTTP + WebSocket server ──────────────────────────────────────
 
@@ -32,27 +34,80 @@ positionService.on("position", (position) => {
 async function bootstrap() {
   if (env.hasContracts) {
     try {
-      const [chainProducts, chainPositions, chainStats] = await Promise.all([
-        contractService.getAllProducts(),
-        contractService.getAllPositions(),
-        contractService.getPoolStats(),
-      ]);
-      await positionService.initFromChain(chainProducts, chainPositions, chainStats);
+      // Phase 1 — restore from DB (instant, no chain calls)
+      await positionService.initFromDb();
+
+      // Phase 2 — sync new events from chain
+      const chainStats = await contractService.getPoolStats();
+
+      if (env.deployBlock !== undefined) {
+        // Event-based indexing: chunk getLogs into 999-block batches
+        const lastIndexed = await databaseService.getLastIndexedBlock();
+        const fromBlock = lastIndexed !== null ? lastIndexed + 1n : env.deployBlock;
+        const toBlock = await contractService.getBlockNumber();
+
+        if (fromBlock <= toBlock) {
+          console.info(`[tracker] indexing events from block ${fromBlock} to ${toBlock}...`);
+
+          const [newProductIds, newPositionIds] = await Promise.all([
+            contractService.getProductIdsInRange(fromBlock, toBlock),
+            contractService.getPositionIdsInRange(fromBlock, toBlock),
+          ]);
+
+          const [newProducts, newPositions] = await Promise.all([
+            Promise.all(newProductIds.map((id) => contractService.getProduct(id).catch(() => null))),
+            Promise.all(newPositionIds.map((id) => contractService.getPosition(id).catch(() => null))),
+          ]);
+
+          await positionService.initFromChain(
+            newProducts.filter((p): p is Awaited<ReturnType<typeof contractService.getProduct>> => p !== null),
+            newPositions.filter((p): p is Awaited<ReturnType<typeof contractService.getPosition>> => p !== null),
+            chainStats,
+          );
+
+          await databaseService.setLastIndexedBlock(toBlock);
+          console.info(`[tracker] indexed up to block ${toBlock}`);
+        } else {
+          positionService.applyChainStats(chainStats);
+          console.info(`[tracker] already up to date at block ${lastIndexed}`);
+        }
+      } else {
+        // Fallback: count-based parallel reads (no DEPLOY_BLOCK configured)
+        const [chainProducts, chainPositions] = await Promise.all([
+          contractService.getAllProducts(),
+          contractService.getAllPositions(),
+        ]);
+        await positionService.initFromChain(chainProducts, chainPositions, chainStats);
+      }
 
       // Refresh pool stats every minute
       setInterval(async () => {
         try {
           const stats = await contractService.getPoolStats();
           positionService.applyChainStats(stats);
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }, 60_000);
+
+      // Watch for new products
+      contractService.watchProductCreated(async (productId) => {
+        try {
+          const product = await contractService.getProduct(productId);
+          positionService.applyChainProduct(product);
+        } catch {
+          /* ignore */
+        }
+      });
 
       // Watch for new / updated positions
       contractService.watchPositionCreated(async (positionId) => {
         try {
           const pos = await contractService.getPosition(positionId);
           positionService.applyChainPosition(pos);
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       });
 
       contractService.watchPositionStatusChange(
@@ -60,90 +115,83 @@ async function bootstrap() {
           try {
             const pos = await contractService.getPosition(positionId);
             positionService.applyChainPosition(pos);
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         },
         async (positionId) => {
           try {
             const pos = await contractService.getPosition(positionId);
             positionService.applyChainPosition(pos);
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         },
       );
 
       // Watch orchestrator for real agent logs
       contractService.watchOrchestratorEvents({
-        onDepegStart: (positionId, requestId) => {
+        onBatchStart: (firstPositionId, batchSize, requestId) => {
           positionService.recordLog({
-            id:        `depeg-start-${requestId}`,
-            positionId,
+            id: `batch-start-${requestId}`,
+            positionId: firstPositionId,
             timestamp: new Date().toISOString(),
-            agent:     "TRACKER",
-            action:    "Depeg validation started",
-            data:      `Agent 1 (JSON API) requested. requestId: ${requestId}`,
-            txHash:    null,
+            agent: "TRACKER",
+            action: "Batch validation started",
+            data: `Agent 1 (JSON API) requested. Batch size: ${batchSize}. requestId: ${requestId}`,
+            txHash: null,
           });
         },
-        onRugStart: (positionId, requestId) => {
-          positionService.recordLog({
-            id:        `rug-start-${requestId}`,
-            positionId,
-            timestamp: new Date().toISOString(),
-            agent:     "TRACKER",
-            action:    "Rug validation started",
-            data:      `Agent 1 (JSON API) requested. requestId: ${requestId}`,
-            txHash:    null,
-          });
-        },
-        onStep: (positionId, step, requestId) => {
+        onStep: (firstPositionId, step, requestId) => {
           const agentNames: Record<number, string> = {
             2: "Agent 2 (LLM inference)",
             3: "Agent 3 (News verification)",
           };
           positionService.recordLog({
-            id:        `step-${step}-${requestId}`,
-            positionId,
+            id: `step-${step}-${requestId}`,
+            positionId: firstPositionId,
             timestamp: new Date().toISOString(),
-            agent:     step === 2 ? "AGENT_2" : "AGENT_3",
-            action:    `Step ${step} advanced`,
-            data:      `${agentNames[step] ?? `Step ${step}`} requested. requestId: ${requestId}`,
-            txHash:    null,
+            agent: step === 2 ? "AGENT_2" : "AGENT_3",
+            action: `Step ${step} advanced`,
+            data: `${agentNames[step] ?? `Step ${step}`} requested. requestId: ${requestId}`,
+            txHash: null,
           });
         },
-        onVerified: (positionId, confirmedPrice, payout) => {
+        onVerified: (positionId, confirmedPrice, payout, txHash) => {
           positionService.recordLog({
-            id:        `verified-${positionId}-${Date.now()}`,
+            id: `verified-${positionId}-${Date.now()}`,
             positionId,
             timestamp: new Date().toISOString(),
-            agent:     "AGENT_3",
-            action:    "Trigger verified — payout initiated",
-            data:      `Confirmed price: ${Number(confirmedPrice) / 1e18} | Payout: $${Number(payout) / 1e6}`,
-            txHash:    null,
+            agent: "AGENT_3",
+            action: "Trigger verified — payout initiated",
+            data: `Confirmed price: ${Number(confirmedPrice) / 1e18} | Payout: $${Number(payout) / 1e6}`,
+            txHash: txHash ?? null,
           });
           // Refresh position status
-          contractService.getPosition(positionId).then((pos) => {
-            positionService.applyChainPosition(pos);
-          }).catch(() => {});
+          contractService
+            .getPosition(positionId)
+            .then((pos) => {
+              positionService.applyChainPosition(pos);
+            })
+            .catch(() => {});
         },
-        onDenied: (positionId, reason, step) => {
+        onDenied: (firstPositionId, reason, step) => {
           positionService.recordLog({
-            id:        `denied-${positionId}-${Date.now()}`,
-            positionId,
+            id: `denied-${firstPositionId}-${Date.now()}`,
+            positionId: firstPositionId,
             timestamp: new Date().toISOString(),
-            agent:     step === 1 ? "AGENT_1" : step === 2 ? "AGENT_2" : "AGENT_3",
-            action:    `Trigger denied at step ${step}`,
-            data:      reason,
-            txHash:    null,
+            agent: step === 1 ? "AGENT_1" : step === 2 ? "AGENT_2" : "AGENT_3",
+            action: `Trigger denied at step ${step}`,
+            data: reason,
+            txHash: null,
           });
         },
       });
-
     } catch (err) {
-      console.error("[tracker] chain sync failed, falling back to demo data:", err);
-      positionService.useDemoData();
+      console.error("[tracker] chain sync failed — running with empty state:", err);
     }
   } else {
-    console.warn("[tracker] no contract addresses configured — using demo data");
-    positionService.useDemoData();
+    console.warn("[tracker] no contract addresses configured — running with empty state");
   }
 
   // ── Monitors ────────────────────────────────────────────────────
@@ -153,7 +201,9 @@ async function bootstrap() {
 
   // ── Listen ──────────────────────────────────────────────────────
   server.listen(env.port, env.host, () => {
-    console.info(`[tracker] dashboard api running at http://${env.host}:${env.port}`);
+    console.info(
+      `[tracker] dashboard api running at http://${env.host}:${env.port}`,
+    );
   });
 }
 

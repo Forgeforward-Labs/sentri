@@ -10,6 +10,7 @@ import EarnPage from './pages/EarnPage'
 import DashboardPage from './pages/DashboardPage'
 import PositionDetailPage from './pages/PositionDetailPage'
 import AdminPage from './pages/AdminPage'
+import AnalyticsPage from './pages/AnalyticsPage'
 
 const queryClient = new QueryClient()
 
@@ -27,6 +28,7 @@ export default function App() {
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/position/:id" element={<PositionDetailPage />} />
             <Route path="/admin" element={<AdminPage />} />
+            <Route path="/analytics" element={<AnalyticsPage />} />
           </Routes>
         </BrowserRouter>
       </QueryClientProvider>

@@ -1,7 +1,17 @@
-import { demoAgentLogs, demoPoolStats, demoPositions, demoProducts } from "@sentri/config";
-import type { AgentLogEntry, PoolStats, Position, Product } from "@sentri/shared-types";
+import type {
+  AgentLogEntry,
+  AnalyticsSummary,
+  Claim,
+  Participant,
+  PoolSnapshot,
+  PoolStats,
+  Position,
+  Product,
+  ProductStats,
+} from "@sentri/shared-types";
 import { EventEmitter } from "node:events";
 import type { ChainPoolStats, ChainPosition, ChainProduct } from "./contractService.js";
+import { DatabaseService } from "./databaseService.js";
 
 type TrackerEvents = {
   log:      [AgentLogEntry];
@@ -82,32 +92,48 @@ export class PositionService extends EventEmitter<TrackerEvents> {
   private positions: Position[] = [];
   private logs: AgentLogEntry[] = [];
   private products: Product[] = [];
-  private poolStats: PoolStats = { ...demoPoolStats };
-  private synced = false;
+  private poolStats: PoolStats = {
+    totalDepositedUsd: 0,
+    totalLockedUsd: 0,
+    utilizationBps: 0,
+    apyEstimate: 0,
+    shareValue: 1,
+  };
+  private readonly db = new DatabaseService();
 
-  // ── Called once on startup with chain data ───────────────────────
+  // ── Called first on startup: restore from DB ────────────────────
+
+  async initFromDb() {
+    const [dbProducts, dbPositions, dbLogs] = await Promise.all([
+      this.db.getAllProducts(),
+      this.db.getAllPositions(),
+      this.db.getAllLogs(),
+    ]);
+    this.products  = dbProducts;
+    this.positions = dbPositions;
+    this.logs      = dbLogs;
+    if (dbProducts.length > 0 || dbPositions.length > 0) {
+        console.info(
+        `[position-service] restored ${dbProducts.length} products, ${dbPositions.length} positions from DB`,
+      );
+    }
+  }
+
+  // ── Called after initFromDb to apply new chain data ─────────────
 
   async initFromChain(
     chainProducts: ChainProduct[],
     chainPositions: ChainPosition[],
     chainStats: ChainPoolStats,
   ) {
-    this.products  = chainProducts.map(chainProductToProduct);
-    this.positions = chainPositions.map(chainPositionToPosition);
-    this.poolStats = chainStatsToPoolStats(chainStats);
-    this.synced    = true;
-    console.info(`[position-service] synced ${this.products.length} products, ${this.positions.length} positions from chain`);
-  }
+    // Incremental upsert on top of DB-restored state
+    for (const p of chainProducts) this.applyChainProduct(p);
+    for (const p of chainPositions) this.applyChainPosition(p);
+    this.applyChainStats(chainStats);
 
-  // Fall back to demo data if contracts aren't configured
-  useDemoData() {
-    if (!this.synced) {
-      this.products  = [...demoProducts];
-      this.positions = [...demoPositions];
-      this.poolStats = { ...demoPoolStats };
-      this.logs      = [...demoAgentLogs];
-      console.info("[position-service] using demo data (no contract addresses configured)");
-    }
+    console.info(
+      `[position-service] applied ${chainProducts.length} products, ${chainPositions.length} positions from chain`,
+    );
   }
 
   // ── Apply individual updates from chain events ───────────────────
@@ -117,6 +143,9 @@ export class PositionService extends EventEmitter<TrackerEvents> {
     const idx = this.products.findIndex((x) => x.id === p.id);
     if (idx === -1) this.products.unshift(converted);
     else this.products[idx] = converted;
+    this.db.upsertProduct(converted).catch((err) =>
+      console.error("[db] upsertProduct failed:", err),
+    );
   }
 
   applyChainPosition(p: ChainPosition) {
@@ -126,6 +155,11 @@ export class PositionService extends EventEmitter<TrackerEvents> {
 
   applyChainStats(s: ChainPoolStats) {
     this.poolStats = chainStatsToPoolStats(s);
+    this.db.insertPoolSnapshot({
+      totalDepositedUsd: this.poolStats.totalDepositedUsd,
+      totalLockedUsd:    this.poolStats.totalLockedUsd,
+      utilizationBps:    this.poolStats.utilizationBps,
+    }).catch(() => {});
   }
 
   // ── Accessors ────────────────────────────────────────────────────
@@ -146,17 +180,124 @@ export class PositionService extends EventEmitter<TrackerEvents> {
 
   getPoolStats() { return this.poolStats; }
 
+  // ── Analytics ────────────────────────────────────────────────────
+
+  /**
+   * Derives claims from positions that have status=CLAIMED.
+   * Uses agent_logs to find the txHash and claimedAt timestamp.
+   */
+  getClaims(): Claim[] {
+    return this.positions
+      .filter((p) => p.status === "CLAIMED")
+      .map((p) => {
+        const log = this.logs.find(
+          (l) => l.positionId === p.id && l.agent === "AGENT_3" && l.txHash,
+        );
+        return {
+          positionId:     p.id,
+          productId:      p.productId,
+          holder:         p.holder,
+          coverageUsd:    p.coverageAmountUsd,
+          payoutUsd:      p.claimedPayoutUsd ?? 0,
+          confirmedPrice: p.claimedPrice,
+          claimedAt:      log?.timestamp ?? p.createdAt,
+          txHash:         log?.txHash ?? null,
+        };
+      });
+  }
+
+  /** Aggregates per-address stats from all positions. */
+  getParticipants(): Participant[] {
+    const map = new Map<string, Position[]>();
+    for (const pos of this.positions) {
+      const key = pos.holder.toLowerCase();
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(pos);
+    }
+    return Array.from(map.entries()).map(([address, posns]) => {
+      const active  = posns.filter((p) => p.status === "ACTIVE");
+      const claimed = posns.filter((p) => p.status === "CLAIMED");
+      const sorted  = [...posns].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      return {
+        address,
+        totalCoverageUsd: posns.reduce((s, p) => s + p.coverageAmountUsd, 0),
+        totalPremiumUsd:  posns.reduce((s, p) => s + p.premiumUsd, 0),
+        activePositions:  active.length,
+        totalPositions:   posns.length,
+        claimedCount:     claimed.length,
+        totalPayoutUsd:   claimed.reduce((s, p) => s + (p.claimedPayoutUsd ?? 0), 0),
+        firstSeenAt:      sorted[0].createdAt,
+        lastSeenAt:       sorted[sorted.length - 1].createdAt,
+      };
+    });
+  }
+
+  getParticipant(address: string): Participant | null {
+    const participants = this.getParticipants();
+    return participants.find((p) => p.address === address.toLowerCase()) ?? null;
+  }
+
+  getAnalytics(): AnalyticsSummary {
+    const active  = this.positions.filter((p) => p.status === "ACTIVE");
+    const claimed = this.positions.filter((p) => p.status === "CLAIMED");
+
+    const productStats: ProductStats[] = this.products.map((product) => {
+      const posns        = this.positions.filter((p) => p.productId === product.id);
+      const productActive = posns.filter((p) => p.status === "ACTIVE");
+      const productClaimed = posns.filter((p) => p.status === "CLAIMED");
+      return {
+        id:               product.id,
+        name:             product.name,
+        triggerType:      product.triggerType,
+        activePositions:  productActive.length,
+        totalPositions:   posns.length,
+        totalCoverageUsd: posns.reduce((s, p) => s + p.coverageAmountUsd, 0),
+        totalPremiumUsd:  posns.reduce((s, p) => s + p.premiumUsd, 0),
+        totalPayoutsUsd:  productClaimed.reduce((s, p) => s + (p.claimedPayoutUsd ?? 0), 0),
+        claimCount:       productClaimed.length,
+        claimRate:        posns.length > 0 ? productClaimed.length / posns.length : 0,
+        utilizationPct:   product.poolLimitUsd > 0
+          ? product.totalCommittedUsd / product.poolLimitUsd
+          : 0,
+      };
+    });
+
+    const participants = new Set(this.positions.map((p) => p.holder.toLowerCase())).size;
+
+    return {
+      totalActiveCoverageUsd: active.reduce((s, p) => s + p.coverageAmountUsd, 0),
+      totalLockedPremiumUsd:  active.reduce((s, p) => s + p.premiumUsd, 0),
+      totalPayoutsUsd:        claimed.reduce((s, p) => s + (p.claimedPayoutUsd ?? 0), 0),
+      totalParticipants:      participants,
+      totalPositions:         this.positions.length,
+      activePositions:        active.length,
+      claimCount:             claimed.length,
+      claimRate:              this.positions.length > 0 ? claimed.length / this.positions.length : 0,
+      productStats,
+    };
+  }
+
+  async getPoolSnapshots(limit?: number): Promise<PoolSnapshot[]> {
+    return this.db.getPoolSnapshots(limit);
+  }
+
   // ── Mutations ────────────────────────────────────────────────────
 
   updatePosition(next: Position) {
     const idx = this.positions.findIndex((p) => p.id === next.id);
     if (idx === -1) this.positions.unshift(next);
     else this.positions[idx] = next;
+    this.db.upsertPosition(next).catch((err) =>
+      console.error("[db] upsertPosition failed:", err),
+    );
     this.emit("position", next);
   }
 
   recordLog(entry: AgentLogEntry) {
     this.logs.unshift(entry);
+    this.db.insertLog(entry).catch((err) =>
+      console.error("[db] insertLog failed:", err),
+    );
     this.emit("log", entry);
   }
 
