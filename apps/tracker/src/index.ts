@@ -49,14 +49,17 @@ async function bootstrap() {
         if (fromBlock <= toBlock) {
           console.info(`[tracker] indexing events from block ${fromBlock} to ${toBlock}...`);
 
-          const [newProductIds, newPositionIds] = await Promise.all([
+          const [newProductIds, newPositionIds, changedPositionIds] = await Promise.all([
             contractService.getProductIdsInRange(fromBlock, toBlock),
             contractService.getPositionIdsInRange(fromBlock, toBlock),
+            contractService.getPositionStatusChangesInRange(fromBlock, toBlock),
           ]);
+
+          const allPositionIds = [...new Set([...newPositionIds, ...changedPositionIds])];
 
           const [newProducts, newPositions] = await Promise.all([
             Promise.all(newProductIds.map((id) => contractService.getProduct(id).catch(() => null))),
-            Promise.all(newPositionIds.map((id) => contractService.getPosition(id).catch(() => null))),
+            Promise.all(allPositionIds.map((id) => contractService.getPosition(id).catch(() => null))),
           ]);
 
           await positionService.initFromChain(
@@ -66,7 +69,10 @@ async function bootstrap() {
           );
 
           await databaseService.setLastIndexedBlock(toBlock);
-          console.info(`[tracker] indexed up to block ${toBlock}`);
+          console.info(
+            `[tracker] indexed up to block ${toBlock} ` +
+            `(${newProductIds.length} products, ${allPositionIds.length} positions)`,
+          );
         } else {
           positionService.applyChainStats(chainStats);
           console.info(`[tracker] already up to date at block ${lastIndexed}`);
