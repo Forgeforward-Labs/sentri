@@ -1,8 +1,12 @@
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
+import { DatabaseService } from "../services/databaseService.js";
 import { PositionService } from "../services/positionService.js";
 
-export function createDashboardApi(positionService: PositionService) {
+export function createDashboardApi(
+  positionService: PositionService,
+  databaseService: DatabaseService,
+) {
   const app = express();
 
   app.use((_req: Request, res: Response, next: NextFunction) => {
@@ -15,6 +19,15 @@ export function createDashboardApi(positionService: PositionService) {
 
   app.get("/health", (_request, response) => {
     response.json({ ok: true, service: "sentri-tracker" });
+  });
+
+  app.get("/status", async (_request, response) => {
+    const lastIndexedBlock = await databaseService.getLastIndexedBlock();
+    response.json({
+      lastIndexedBlock: lastIndexedBlock?.toString() ?? null,
+      productCount: positionService.getProducts().length,
+      positionCount: positionService.getPositions().length,
+    });
   });
 
   app.get("/products", (_request, response) => {

@@ -15,7 +15,7 @@ const databaseService = new DatabaseService();
 
 // ── HTTP + WebSocket server ──────────────────────────────────────
 
-const app = createDashboardApi(positionService);
+const app = createDashboardApi(positionService, databaseService);
 const server = createServer(app);
 const websocketServer = new WebSocketServer({ server, path: "/" });
 
@@ -43,6 +43,11 @@ async function bootstrap() {
       if (env.deployBlock !== undefined) {
         // Event-based indexing: chunk getLogs into 999-block batches
         const lastIndexed = await databaseService.getLastIndexedBlock();
+        console.info(
+          lastIndexed !== null
+            ? `[tracker] resuming from block ${lastIndexed}`
+            : `[tracker] first run — indexing from deploy block ${env.deployBlock}`,
+        );
         const fromBlock = lastIndexed !== null ? lastIndexed + 1n : env.deployBlock;
         const toBlock = await contractService.getBlockNumber();
 
@@ -130,12 +135,10 @@ async function bootstrap() {
 
             await databaseService.setLastIndexedBlock(toBlock);
 
-            if (newProductIds.length > 0 || allPositionIds.length > 0) {
-              console.info(
-                `[tracker] polled blocks ${fromBlock}–${toBlock}: ` +
-                `${newProductIds.length} new products, ${allPositionIds.length} position updates`,
-              );
-            }
+            const summary = newProductIds.length > 0 || allPositionIds.length > 0
+              ? `${newProductIds.length} new products, ${allPositionIds.length} position updates`
+              : "no new events";
+            console.info(`[tracker] polled blocks ${fromBlock}–${toBlock}: ${summary}`);
           } catch (err) {
             console.error("[tracker] poll error:", err);
           } finally {
