@@ -11,17 +11,17 @@ interface IPolicyVaultCore {
 }
 
 interface IAgentOrchestratorCore {
-    function startDepegValidation(
-        uint256 positionId,
+    function startDepegValidationBatch(
+        uint256[] calldata positionIds,
         uint256 observedPrice,
         uint256 threshold,
-        uint256 coverageAmount
+        uint256[] calldata coverageAmounts
     ) external;
-    function startRugValidation(
-        uint256 positionId,
+    function startRugValidationBatch(
+        uint256[] calldata positionIds,
         uint256 observedLiquidityPct,
         uint256 threshold,
-        uint256 coverageAmount
+        uint256[] calldata coverageAmounts
     ) external;
 }
 
@@ -109,29 +109,25 @@ contract InsuranceCore is Ownable {
     error CoverageTooHigh();
     error PoolLimitReached();
     error InsufficientLiquidity();
+    error EmptyBatch();
+    error MixedProductsInBatch();
 
     constructor(address vaultAddress) Ownable(msg.sender) {
         vault = IPolicyVaultCore(vaultAddress);
     }
 
     modifier onlyTracker() {
-        if (msg.sender != tracker) {
-            revert OnlyTracker();
-        }
+        if (msg.sender != tracker) revert OnlyTracker();
         _;
     }
 
     modifier onlyOwnerOrTracker() {
-        if (msg.sender != owner() && msg.sender != tracker) {
-            revert OnlyOwnerOrTracker();
-        }
+        if (msg.sender != owner() && msg.sender != tracker) revert OnlyOwnerOrTracker();
         _;
     }
 
     modifier onlyClaimProcessor() {
-        if (msg.sender != claimProcessor) {
-            revert OnlyClaimProcessor();
-        }
+        if (msg.sender != claimProcessor) revert OnlyClaimProcessor();
         _;
     }
 
@@ -173,7 +169,6 @@ contract InsuranceCore is Ownable {
             referenceTVL: 0,
             active: true
         });
-
         emit ProductCreated(productId, name, TriggerType.DEPEG);
     }
 
@@ -201,7 +196,6 @@ contract InsuranceCore is Ownable {
             referenceTVL: referenceTVL,
             active: true
         });
-
         emit ProductCreated(productId, name, TriggerType.RUG);
     }
 
@@ -217,18 +211,10 @@ contract InsuranceCore is Ownable {
 
     function buyPosition(uint256 productId, uint256 coverageAmount) external returns (uint256 positionId) {
         Product storage product = products[productId];
-        if (!product.active) {
-            revert ProductInactive();
-        }
-        if (coverageAmount > product.maxPerPosition) {
-            revert CoverageTooHigh();
-        }
-        if (product.totalCommitted + coverageAmount > product.poolLimit) {
-            revert PoolLimitReached();
-        }
-        if (vault.availableLiquidity() < coverageAmount) {
-            revert InsufficientLiquidity();
-        }
+        if (!product.active) revert ProductInactive();
+        if (coverageAmount > product.maxPerPosition) revert CoverageTooHigh();
+        if (product.totalCommitted + coverageAmount > product.poolLimit) revert PoolLimitReached();
+        if (vault.availableLiquidity() < coverageAmount) revert InsufficientLiquidity();
 
         uint256 premium = calculatePremium(productId, coverageAmount);
         positionId = ++positionCount;
@@ -255,9 +241,7 @@ contract InsuranceCore is Ownable {
 
     function expirePosition(uint256 positionId) external onlyTracker {
         Position storage position = positions[positionId];
-        if (position.status != PositionStatus.ACTIVE) {
-            revert PositionStateInvalid();
-        }
+        if (position.status != PositionStatus.ACTIVE) revert PositionStateInvalid();
 
         position.status = PositionStatus.EXPIRED;
         products[position.productId].totalCommitted -= position.coverageAmount;
@@ -266,49 +250,93 @@ contract InsuranceCore is Ownable {
         emit PositionExpired(positionId);
     }
 
+    // ── Claim initiation — single position (wraps batch) ────────────────────
+
     function initiateDepegClaim(uint256 positionId, uint256 observedPrice) external onlyTracker {
-        Position storage position = positions[positionId];
-        if (position.status != PositionStatus.ACTIVE) {
-            revert PositionStateInvalid();
-        }
-
-        DepegParams memory params = abi.decode(
-            products[position.productId].triggerParams,
-            (DepegParams)
-        );
-
-        IAgentOrchestratorCore(agentOrchestrator).startDepegValidation(
-            positionId,
-            observedPrice,
-            params.threshold,
-            position.coverageAmount
-        );
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = positionId;
+        _initiateDepegBatch(ids, observedPrice);
     }
 
     function initiateRugClaim(uint256 positionId, uint256 observedLiquidityPct) external onlyTracker {
-        Position storage position = positions[positionId];
-        if (position.status != PositionStatus.ACTIVE) {
-            revert PositionStateInvalid();
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = positionId;
+        _initiateRugBatch(ids, observedLiquidityPct);
+    }
+
+    // ── Claim initiation — batch (one agent run, N payouts) ─────────────────
+
+    /// @notice All positionIds must be ACTIVE and belong to the same DEPEG product.
+    function initiateDepegClaimBatch(
+        uint256[] calldata positionIds,
+        uint256 observedPrice
+    ) external onlyTracker {
+        _initiateDepegBatch(positionIds, observedPrice);
+    }
+
+    /// @notice All positionIds must be ACTIVE and belong to the same RUG product.
+    function initiateRugClaimBatch(
+        uint256[] calldata positionIds,
+        uint256 observedLiquidityPct
+    ) external onlyTracker {
+        _initiateRugBatch(positionIds, observedLiquidityPct);
+    }
+
+    function _initiateDepegBatch(
+        uint256[] memory positionIds,
+        uint256 observedPrice
+    ) internal {
+        if (positionIds.length == 0) revert EmptyBatch();
+
+        uint256 productId = positions[positionIds[0]].productId;
+        DepegParams memory params = abi.decode(products[productId].triggerParams, (DepegParams));
+
+        uint256[] memory coverages = new uint256[](positionIds.length);
+        for (uint256 i = 0; i < positionIds.length; i++) {
+            Position storage pos = positions[positionIds[i]];
+            if (pos.status != PositionStatus.ACTIVE) revert PositionStateInvalid();
+            if (pos.productId != productId) revert MixedProductsInBatch();
+            coverages[i] = pos.coverageAmount;
         }
 
-        RugParams memory params = abi.decode(
-            products[position.productId].triggerParams,
-            (RugParams)
-        );
-
-        IAgentOrchestratorCore(agentOrchestrator).startRugValidation(
-            positionId,
-            observedLiquidityPct,
-            params.liquidityThreshold,
-            position.coverageAmount
+        IAgentOrchestratorCore(agentOrchestrator).startDepegValidationBatch(
+            positionIds,
+            observedPrice,
+            params.threshold,
+            coverages
         );
     }
 
+    function _initiateRugBatch(
+        uint256[] memory positionIds,
+        uint256 observedLiquidityPct
+    ) internal {
+        if (positionIds.length == 0) revert EmptyBatch();
+
+        uint256 productId = positions[positionIds[0]].productId;
+        RugParams memory params = abi.decode(products[productId].triggerParams, (RugParams));
+
+        uint256[] memory coverages = new uint256[](positionIds.length);
+        for (uint256 i = 0; i < positionIds.length; i++) {
+            Position storage pos = positions[positionIds[i]];
+            if (pos.status != PositionStatus.ACTIVE) revert PositionStateInvalid();
+            if (pos.productId != productId) revert MixedProductsInBatch();
+            coverages[i] = pos.coverageAmount;
+        }
+
+        IAgentOrchestratorCore(agentOrchestrator).startRugValidationBatch(
+            positionIds,
+            observedLiquidityPct,
+            params.liquidityThreshold,
+            coverages
+        );
+    }
+
+    // ── Claim settlement ────────────────────────────────────────────────────
+
     function markClaimed(uint256 positionId, uint256 payout) external onlyClaimProcessor {
         Position storage position = positions[positionId];
-        if (position.status != PositionStatus.ACTIVE) {
-            revert PositionStateInvalid();
-        }
+        if (position.status != PositionStatus.ACTIVE) revert PositionStateInvalid();
 
         position.status = PositionStatus.CLAIMED;
         position.claimedPayout = payout;
@@ -331,7 +359,7 @@ contract InsuranceCore is Ownable {
         uint256 premium = (amount * product.premiumRateBps) / 10_000;
 
         if (product.duration > 1 days) {
-          premium = (premium * product.duration) / 1 days;
+            premium = (premium * product.duration) / 1 days;
         }
 
         if (premium < 1e6) {

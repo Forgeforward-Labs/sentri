@@ -100,20 +100,19 @@ contract AgentOrchestrator is Ownable {
     uint256 public constant LLM_COST_PER_AGENT  = 0.07 ether;
     uint256 public constant SUBCOMMITTEE_SIZE   = 3;
 
-    // ── Per-request state ────────────────────────────────────────
-    mapping(uint256 => uint256) public requestToPosition;
-    mapping(uint256 => uint8)   public requestToStep;       // 1 = price, 2 = LLM, 3 = news
-    mapping(uint256 => uint256) public requestToThreshold;
-    mapping(uint256 => uint256) public requestToCoverage;
-    mapping(uint256 => bool)    public requestIsRug;
-    mapping(uint256 => uint256) public requestConfirmedPrice;
+    // ── Per-request state (arrays: one entry per batched position) ─
+    mapping(uint256 => uint256[]) public requestToPositions;  // positionId[]
+    mapping(uint256 => uint256[]) public requestToCoverages;  // coverageAmount[]
+    mapping(uint256 => uint8)     public requestToStep;       // 1=price, 2=LLM, 3=news
+    mapping(uint256 => uint256)   public requestToThreshold;
+    mapping(uint256 => bool)      public requestIsRug;
+    mapping(uint256 => uint256)   public requestConfirmedPrice;
 
     // ── Events ───────────────────────────────────────────────────
-    event DepegValidationStarted(uint256 indexed positionId, uint256 indexed requestId);
-    event RugValidationStarted  (uint256 indexed positionId, uint256 indexed requestId);
-    event StepAdvanced          (uint256 indexed positionId, uint8 step, uint256 indexed requestId);
+    event BatchValidationStarted(uint256 indexed firstPositionId, uint256 batchSize, uint256 indexed requestId);
+    event StepAdvanced          (uint256 indexed firstPositionId, uint8 step, uint256 indexed requestId);
     event TriggerVerified       (uint256 indexed positionId, uint256 confirmedPrice, uint256 payoutAmount);
-    event TriggerDenied         (uint256 indexed positionId, string reason, uint8 step);
+    event TriggerDenied         (uint256 indexed firstPositionId, string reason, uint8 step);
     event AgentIdsUpdated       (uint256 jsonApiAgentId, uint256 llmAgentId);
 
     // ── Errors ───────────────────────────────────────────────────
@@ -162,19 +161,14 @@ contract AgentOrchestrator is Ownable {
 
     // ─────────────────────────────────────────────────────────────
     //  Entry points — called by InsuranceCore (via tracker)
+    //  One agent run validates all positions in the batch.
     // ─────────────────────────────────────────────────────────────
 
-    /**
-     * @param positionId     On-chain position ID.
-     * @param observedPrice  Raw price in 18-decimal WAD (e.g. 0.97e18).
-     * @param threshold      Depeg threshold in 18-decimal WAD (e.g. 0.97e18).
-     * @param coverageAmount Coverage in USDC 6-decimal units.
-     */
-    function startDepegValidation(
-        uint256 positionId,
+    function startDepegValidationBatch(
+        uint256[] calldata positionIds,
         uint256 observedPrice,
         uint256 threshold,
-        uint256 coverageAmount
+        uint256[] calldata coverageAmounts
     ) external onlyCore {
         uint256 cost = _jsonApiCost();
         if (address(this).balance < cost) revert InsufficientSTT(cost, address(this).balance);
@@ -193,33 +187,19 @@ contract AgentOrchestrator is Ownable {
             payload
         );
 
-        requestToPosition      [requestId] = positionId;
-        requestToStep          [requestId] = 1;
-        requestToThreshold     [requestId] = threshold;
-        requestToCoverage      [requestId] = coverageAmount;
-        requestIsRug           [requestId] = false;
-        requestConfirmedPrice  [requestId] = observedPrice;
-
-        emit DepegValidationStarted(positionId, requestId);
+        _storeRequest(requestId, positionIds, coverageAmounts, 1, threshold, false, observedPrice);
+        emit BatchValidationStarted(positionIds[0], positionIds.length, requestId);
     }
 
-    /**
-     * @param positionId           On-chain position ID.
-     * @param observedLiquidityPct Observed liquidity in basis points (5000 = 50%).
-     * @param threshold            Rug threshold in bps.
-     * @param coverageAmount       Coverage in USDC 6-decimal units.
-     */
-    function startRugValidation(
-        uint256 positionId,
+    function startRugValidationBatch(
+        uint256[] calldata positionIds,
         uint256 observedLiquidityPct,
         uint256 threshold,
-        uint256 coverageAmount
+        uint256[] calldata coverageAmounts
     ) external onlyCore {
         uint256 cost = _jsonApiCost();
         if (address(this).balance < cost) revert InsufficientSTT(cost, address(this).balance);
 
-        // Fetch current liquidity from a DeFiLlama-style endpoint.
-        // For the demo we check USDC price as a proxy; replace with real pool API.
         bytes memory payload = abi.encodeWithSelector(
             IJsonApiAgent.fetchUint.selector,
             "https://api.coingecko.com/api/v3/simple/price?ids=usd-coin&vs_currencies=usd",
@@ -234,15 +214,9 @@ contract AgentOrchestrator is Ownable {
             payload
         );
 
-        requestToPosition      [requestId] = positionId;
-        requestToStep          [requestId] = 1;
-        requestToThreshold     [requestId] = threshold;
-        requestToCoverage      [requestId] = coverageAmount;
-        requestIsRug           [requestId] = true;
-        // Store the observed liquidity pct so handlePriceResponse can compare it.
-        requestConfirmedPrice  [requestId] = observedLiquidityPct;
-
-        emit RugValidationStarted(positionId, requestId);
+        // Store observedLiquidityPct in requestConfirmedPrice for use in handlePriceResponse
+        _storeRequest(requestId, positionIds, coverageAmounts, 1, threshold, true, observedLiquidityPct);
+        emit BatchValidationStarted(positionIds[0], positionIds.length, requestId);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -255,13 +229,13 @@ contract AgentOrchestrator is Ownable {
         ResponseStatus status,
         AgentRequest memory /* details */
     ) external onlyPlatform {
-        uint256 positionId = requestToPosition[requestId];
-        uint256 threshold  = requestToThreshold[requestId];
-        uint256 coverage   = requestToCoverage[requestId];
-        bool    isRug      = requestIsRug[requestId];
+        uint256[] memory posIds    = requestToPositions[requestId];
+        uint256[] memory coverages = requestToCoverages[requestId];
+        uint256 threshold          = requestToThreshold[requestId];
+        bool    isRug              = requestIsRug[requestId];
 
         if (status != ResponseStatus.Success || responses.length == 0) {
-            emit TriggerDenied(positionId, "Agent 1: price fetch failed", 1);
+            emit TriggerDenied(posIds[0], "Agent 1: price fetch failed", 1);
             _clearRequest(requestId);
             return;
         }
@@ -273,29 +247,28 @@ contract AgentOrchestrator is Ownable {
         uint256 confirmedValue;
 
         if (isRug) {
-            // For rug checks we compare the observed liquidity pct (stored in requestConfirmedPrice)
             uint256 observedPct = requestConfirmedPrice[requestId];
             triggered      = observedPct < threshold;
             confirmedValue = observedPct;
         } else {
-            // Convert 8-decimal to 18-decimal WAD for comparison
             uint256 priceWad = priceE8 * 1e10;
             triggered      = priceWad < threshold;
             confirmedValue = priceWad;
             if (triggered) {
-                IInsuranceCoreOrchestrator(core).setClaimedPrice(positionId, priceWad);
+                for (uint256 i = 0; i < posIds.length; i++) {
+                    IInsuranceCoreOrchestrator(core).setClaimedPrice(posIds[i], priceWad);
+                }
             }
         }
 
         if (!triggered) {
-            emit TriggerDenied(positionId, "Agent 1: value above threshold", 1);
+            emit TriggerDenied(posIds[0], "Agent 1: value above threshold", 1);
             _clearRequest(requestId);
             return;
         }
 
-        // Price confirmed — advance to LLM classification (step 2)
-        emit StepAdvanced(positionId, 2, requestId);
-        _callLlm(requestId, positionId, coverage, threshold, isRug, confirmedValue, true);
+        emit StepAdvanced(posIds[0], 2, requestId);
+        _callLlm(requestId, posIds, coverages, threshold, isRug, confirmedValue, true);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -304,8 +277,8 @@ contract AgentOrchestrator is Ownable {
 
     function _callLlm(
         uint256 prevRequestId,
-        uint256 positionId,
-        uint256 coverage,
+        uint256[] memory posIds,
+        uint256[] memory coverages,
         uint256 threshold,
         bool    isRug,
         uint256 confirmedValue,
@@ -313,7 +286,7 @@ contract AgentOrchestrator is Ownable {
     ) internal {
         uint256 cost = _llmCost();
         if (address(this).balance < cost) {
-            emit TriggerDenied(positionId, "Insufficient STT for LLM agent", isStep2 ? 2 : 3);
+            emit TriggerDenied(posIds[0], "Insufficient STT for LLM agent", isStep2 ? 2 : 3);
             _clearRequest(prevRequestId);
             return;
         }
@@ -329,10 +302,7 @@ contract AgentOrchestrator is Ownable {
                 : "Search for very recent news (past 24 hours) about USDC depegging, Circle financial problems, or stablecoin instability. Are there credible reports corroborating a USDC depeg event? Reply YES or NO only.";
         }
 
-        bytes memory payload = abi.encodeWithSelector(
-            ILlmAgent.inferString.selector,
-            prompt
-        );
+        bytes memory payload = abi.encodeWithSelector(ILlmAgent.inferString.selector, prompt);
 
         uint256 newRequestId = platform.createRequest{value: cost}(
             llmAgentId,
@@ -341,13 +311,7 @@ contract AgentOrchestrator is Ownable {
             payload
         );
 
-        requestToPosition     [newRequestId] = positionId;
-        requestToStep         [newRequestId] = isStep2 ? 2 : 3;
-        requestToCoverage     [newRequestId] = coverage;
-        requestToThreshold    [newRequestId] = threshold;
-        requestIsRug          [newRequestId] = isRug;
-        requestConfirmedPrice [newRequestId] = confirmedValue;
-
+        _storeRequest(newRequestId, posIds, coverages, isStep2 ? 2 : 3, threshold, isRug, confirmedValue);
         _clearRequest(prevRequestId);
     }
 
@@ -357,28 +321,27 @@ contract AgentOrchestrator is Ownable {
         ResponseStatus status,
         AgentRequest memory /* details */
     ) external onlyPlatform {
-        uint256 positionId     = requestToPosition[requestId];
-        uint256 coverage       = requestToCoverage[requestId];
-        uint256 threshold      = requestToThreshold[requestId];
-        bool    isRug          = requestIsRug[requestId];
-        uint256 confirmedValue = requestConfirmedPrice[requestId];
+        uint256[] memory posIds    = requestToPositions[requestId];
+        uint256[] memory coverages = requestToCoverages[requestId];
+        uint256 threshold          = requestToThreshold[requestId];
+        bool    isRug              = requestIsRug[requestId];
+        uint256 confirmedValue     = requestConfirmedPrice[requestId];
 
         if (status != ResponseStatus.Success || responses.length == 0) {
-            emit TriggerDenied(positionId, "Agent 2: LLM failed", 2);
+            emit TriggerDenied(posIds[0], "Agent 2: LLM failed", 2);
             _clearRequest(requestId);
             return;
         }
 
         string memory answer = abi.decode(responses[0].result, (string));
         if (!_startsWith(answer, "YES")) {
-            emit TriggerDenied(positionId, answer, 2);
+            emit TriggerDenied(posIds[0], answer, 2);
             _clearRequest(requestId);
             return;
         }
 
-        // LLM confirmed — advance to news verification (step 3)
-        emit StepAdvanced(positionId, 3, requestId);
-        _callLlm(requestId, positionId, coverage, threshold, isRug, confirmedValue, false);
+        emit StepAdvanced(posIds[0], 3, requestId);
+        _callLlm(requestId, posIds, coverages, threshold, isRug, confirmedValue, false);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -391,26 +354,28 @@ contract AgentOrchestrator is Ownable {
         ResponseStatus status,
         AgentRequest memory /* details */
     ) external onlyPlatform {
-        uint256 positionId     = requestToPosition[requestId];
-        uint256 coverage       = requestToCoverage[requestId];
-        uint256 confirmedPrice = requestConfirmedPrice[requestId];
+        uint256[] memory posIds    = requestToPositions[requestId];
+        uint256[] memory coverages = requestToCoverages[requestId];
+        uint256   confirmedPrice   = requestConfirmedPrice[requestId];
 
         if (status != ResponseStatus.Success || responses.length == 0) {
-            emit TriggerDenied(positionId, "Agent 3: news check failed", 3);
+            emit TriggerDenied(posIds[0], "Agent 3: news check failed", 3);
             _clearRequest(requestId);
             return;
         }
 
         string memory answer = abi.decode(responses[0].result, (string));
         if (!_startsWith(answer, "YES")) {
-            emit TriggerDenied(positionId, answer, 3);
+            emit TriggerDenied(posIds[0], answer, 3);
             _clearRequest(requestId);
             return;
         }
 
-        // All 3 agents confirmed — trigger payout
-        IClaimProcessorOrchestrator(claimProcessor).processClaim(positionId, coverage);
-        emit TriggerVerified(positionId, confirmedPrice, coverage);
+        // All 3 agents confirmed — pay out every position in the batch
+        for (uint256 i = 0; i < posIds.length; i++) {
+            IClaimProcessorOrchestrator(claimProcessor).processClaim(posIds[i], coverages[i]);
+            emit TriggerVerified(posIds[i], confirmedPrice, coverages[i]);
+        }
         _clearRequest(requestId);
     }
 
@@ -418,21 +383,38 @@ contract AgentOrchestrator is Ownable {
     //  Helpers
     // ─────────────────────────────────────────────────────────────
 
+    function _storeRequest(
+        uint256 requestId,
+        uint256[] memory posIds,
+        uint256[] memory coverages,
+        uint8   step,
+        uint256 threshold,
+        bool    isRug,
+        uint256 confirmedValue
+    ) internal {
+        requestToPositions[requestId]  = posIds;
+        requestToCoverages[requestId]  = coverages;
+        requestToStep[requestId]       = step;
+        requestToThreshold[requestId]  = threshold;
+        requestIsRug[requestId]        = isRug;
+        requestConfirmedPrice[requestId] = confirmedValue;
+    }
+
+    function _clearRequest(uint256 requestId) internal {
+        delete requestToPositions[requestId];
+        delete requestToCoverages[requestId];
+        delete requestToStep[requestId];
+        delete requestToThreshold[requestId];
+        delete requestIsRug[requestId];
+        delete requestConfirmedPrice[requestId];
+    }
+
     function _jsonApiCost() internal view returns (uint256) {
         return platform.getRequestDeposit() + JSON_COST_PER_AGENT * SUBCOMMITTEE_SIZE;
     }
 
     function _llmCost() internal view returns (uint256) {
         return platform.getRequestDeposit() + LLM_COST_PER_AGENT * SUBCOMMITTEE_SIZE;
-    }
-
-    function _clearRequest(uint256 requestId) internal {
-        delete requestToPosition     [requestId];
-        delete requestToStep         [requestId];
-        delete requestToThreshold    [requestId];
-        delete requestToCoverage     [requestId];
-        delete requestIsRug          [requestId];
-        delete requestConfirmedPrice [requestId];
     }
 
     function _startsWith(string memory str, string memory prefix) internal pure returns (bool) {
