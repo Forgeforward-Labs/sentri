@@ -16,7 +16,7 @@ import {
   INSURANCE_CORE_ABI,
   POLICY_VAULT_ABI,
 } from "../lib/contracts";
-import { useChainProducts } from "../lib/useTrackerData";
+import { useProducts } from "../lib/useTrackerData";
 
 type TabType = "DEPEG" | "RUG";
 
@@ -204,9 +204,9 @@ function PremiumCalculator({ product }: { product: Product }) {
 
 export default function CoverPage() {
   const [activeTab, setActiveTab] = useState<TabType>("DEPEG");
-  const { data: products, isLoading } = useChainProducts();
+  const { data: products, isLoading } = useProducts();
 
-  const filteredProducts = products.filter((p) => p.triggerType === activeTab);
+  const filteredProducts = (products ?? []).filter((p) => p.triggerType === activeTab);
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-12 min-h-screen">

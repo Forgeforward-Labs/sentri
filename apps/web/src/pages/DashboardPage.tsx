@@ -5,7 +5,7 @@ import type { Position } from '@sentri/shared-types'
 import StatusBadge from '../components/StatusBadge'
 import AgentLogTimeline from '../components/AgentLogTimeline'
 import { formatUsd, formatDate, timeUntil, cn } from '../lib/utils'
-import { useChainPositions, useProducts, useAgentLogs } from '../lib/useTrackerData'
+import { usePositions, useProducts, useAgentLogs } from '../lib/useTrackerData'
 
 type TabType = 'active' | 'history' | 'activity'
 
@@ -83,7 +83,10 @@ const TAB_LABELS: Record<TabType, string> = {
 export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<TabType>('active')
   const { address } = useAccount()
-  const { data: myPositions, isLoading } = useChainPositions(address)
+  const { data: allPositions = [], isLoading } = usePositions()
+  const myPositions = address
+    ? allPositions.filter((p) => p.holder.toLowerCase() === address.toLowerCase())
+    : []
   const { data: products } = useProducts()
   const { data: agentLogs = [], isLoading: logsLoading } = useAgentLogs(100)
 

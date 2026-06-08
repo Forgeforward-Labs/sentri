@@ -6,8 +6,7 @@ import { PositionService } from "../services/positionService.js";
  * Rug monitor — polls on-chain liquidity data and triggers rug claims
  * when liquidity drops below a product's threshold.
  *
- * For the demo, this uses a synthetic liquidity reading.
- * In production, replace getPoolLiquidityPctBps() with a real API call
+ * Replace getPoolLiquidityPctBps() with a real liquidity API call
  * (e.g. DeFiLlama /protocol/:slug → tvl comparison).
  */
 

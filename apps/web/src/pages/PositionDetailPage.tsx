@@ -1,6 +1,6 @@
 import { useParams, Link } from 'react-router-dom'
 import type { AgentLogEntry } from '@sentri/shared-types'
-import { useChainPosition, useChainProducts, usePositionLogs } from '../lib/useTrackerData'
+import { usePosition, useProducts, usePositionLogs } from '../lib/useTrackerData'
 import { CheckCircle, Clock, Globe, Brain, Search } from 'lucide-react'
 import StatusBadge from '../components/StatusBadge'
 import AgentLogTimeline from '../components/AgentLogTimeline'
@@ -40,8 +40,8 @@ export default function PositionDetailPage() {
   const { id } = useParams<{ id: string }>()
   const positionId = parseInt(id ?? '', 10)
 
-  const { data: position, isLoading } = useChainPosition(positionId)
-  const { data: products } = useChainProducts()
+  const { data: position, isLoading } = usePosition(positionId)
+  const { data: products } = useProducts()
   const { data: logs = [] } = usePositionLogs(positionId)
   const product = position ? (products ?? []).find((p) => p.id === position.productId) : null
 

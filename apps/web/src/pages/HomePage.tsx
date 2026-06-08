@@ -2,18 +2,9 @@ import { lazy, Suspense } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Shield, Network, Zap } from "lucide-react";
-import { useReadContracts } from "wagmi";
-import { formatUnits } from "viem";
 import StatusBadge from "../components/StatusBadge";
 import { formatUsd, cn } from "../lib/utils";
-import { useChainProducts } from "../lib/useTrackerData";
-import {
-  CORE_ADDRESS,
-  VAULT_ADDRESS,
-  USDC_DECIMALS,
-  INSURANCE_CORE_ADMIN_ABI,
-  POLICY_VAULT_ABI,
-} from "../lib/contracts";
+import { useProducts, usePoolStats, useAnalytics } from "../lib/useTrackerData";
 
 const AgentNetworkScene = lazy(
   () => import("../components/scene/AgentNetworkScene"),
@@ -53,48 +44,16 @@ const steps = [
   },
 ];
 
-function useChainStats() {
-  const { data } = useReadContracts({
-    contracts: [
-      {
-        address: VAULT_ADDRESS,
-        abi: POLICY_VAULT_ABI,
-        functionName: "totalDeposited",
-      },
-      {
-        address: CORE_ADDRESS,
-        abi: INSURANCE_CORE_ADMIN_ABI,
-        functionName: "positionCount",
-      },
-      {
-        address: CORE_ADDRESS,
-        abi: INSURANCE_CORE_ADMIN_ABI,
-        functionName: "productCount",
-      },
-    ],
-    query: {
-      enabled: !!(VAULT_ADDRESS && CORE_ADDRESS),
-      refetchInterval: 30_000,
-    },
-  });
-
-  const tvl =
-    data?.[0].status === "success"
-      ? Number(formatUnits(data[0].result as bigint, USDC_DECIMALS))
-      : null;
-  const positionCount =
-    data?.[1].status === "success" ? Number(data[1].result) : null;
-  const productCount =
-    data?.[2].status === "success" ? Number(data[2].result) : null;
-
-  return { tvl, positionCount, productCount };
-}
-
 export default function HomePage() {
-  const { tvl, positionCount, productCount } = useChainStats();
-  const { data: products, isLoading: productsLoading } = useChainProducts();
+  const { data: poolStats } = usePoolStats();
+  const { data: analytics } = useAnalytics();
+  const { data: products, isLoading: productsLoading } = useProducts();
 
-  const previewProducts = products.slice(0, 3);
+  const tvl = poolStats?.totalDepositedUsd ?? null;
+  const positionCount = analytics?.totalPositions ?? null;
+  const productCount = analytics?.productStats?.length ?? null;
+
+  const previewProducts = (products ?? []).slice(0, 3);
 
   return (
     <div className="min-h-screen">
