@@ -1,64 +1,231 @@
-# Sentri Protocol Monorepo
+# Sentri — Parametric Insurance on Somnia
 
-This Yarn workspaces monorepo is scaffolded directly from the `Sentri Protocol` SRD and mirrors the four main delivery layers described in the document:
+Sentri is an on-chain parametric insurance protocol built on the [Somnia Network](https://somnia.network). It lets users buy instant, trustless coverage against DeFi risks — stablecoin depegs and rug pulls — and pays out automatically when autonomous Somnia AI agents reach consensus that a trigger event occurred. No claim forms, no adjusters, no waiting period.
 
-- `apps/web`: Vite + React frontend for landing, coverage, LP dashboard, and position detail flows.
-- `apps/tracker`: Node.js tracker service with the monitor modules named in the SRD and a small dashboard API/WebSocket server.
-- `packages/contracts`: Hardhat workspace with Solidity stubs for `InsuranceCore`, `PolicyVault`, `AgentOrchestrator`, and `ClaimProcessor`.
-- `packages/shared-types`: Cross-workspace domain types for products, positions, logs, and pool stats.
-- `packages/config`: Shared constants and demo seed data used by the web and tracker apps.
+---
 
-## Workspace Layout
+## How It Works
 
-```text
-.
-├── apps
-│   ├── tracker
-│   └── web
-├── packages
-│   ├── config
-│   ├── contracts
-│   └── shared-types
-├── package.json
-└── tsconfig.base.json
+```
+User buys coverage
+        │
+        ▼
+   InsuranceCore records position + locks funds in PolicyVault
+        │
+        ▼
+   Tracker service monitors prices / liquidity (60–90 s polls)
+        │
+   ─ trigger detected ─
+        │
+        ▼
+   AgentOrchestrator initiates 3-step validation pipeline
+        │
+   Step 1 ─ JSON API Agent   → fetches on-chain price / liquidity
+   Step 2 ─ LLM Agent        → plausibility check ("is this a real event?")
+   Step 3 ─ LLM News Agent   → news / social confirmation (depeg only)
+        │
+   ─ agents reach consensus ─
+        │
+        ▼
+   ClaimProcessor executes payout from PolicyVault → holder's wallet
 ```
 
-## Quick Start
+**Depeg coverage** — proportional payout. If USDC trades at $0.90 against a $0.97 threshold, a $5,000 position pays out `5000 × (0.97 − 0.90) / 0.97 ≈ $361`. Requires all 3 agent steps.
 
-1. Install dependencies:
+**Rug pull coverage** — binary full payout. Triggered when pool liquidity drops below the product threshold. Requires 2 agent steps (price is objective — news step is skipped).
 
-   ```bash
-   yarn install
-   ```
+---
 
-2. Start the web app:
+## Agent Validation Pipeline
 
-   ```bash
-   yarn web:dev
-   ```
+All claim validation runs through [Somnia Agents](https://agents.somnia.network) — the protocol's native AI agent platform. Every step is an on-chain request; callback handlers enforce `msg.sender == platform`.
 
-3. Start the tracker service:
+| Step | Agent Type | What it checks | Products |
+|------|-----------|----------------|---------|
+| 1 | `JsonApiAgent` | Fetches current price or liquidity from a public API | Both |
+| 2 | `LlmAgent` | Plausibility — "Is this a genuine depeg/rug, not a transient glitch?" | Both |
+| 3 | `LlmAgent` | News / social confirmation — corroborates with real-world signals | Depeg only |
 
-   ```bash
-   yarn tracker:dev
-   ```
+A denial at any step (agent failure, timeout, or `NO` answer) cancels the batch — positions stay active and no payout is issued.
 
-4. Compile contracts:
+---
 
-   ```bash
-   yarn contracts:compile
-   ```
+## Smart Contracts
 
-## SRD-to-Code Mapping
+All contracts are deployed on **Somnia Testnet (chain ID 50312)**.
 
-- **Frontend routes** from section 8.1 are scaffolded under `apps/web/app`.
-- **Tracker modules** from section 5.2 are scaffolded under `apps/tracker/src/monitors` and `apps/tracker/src/services`.
-- **Contracts** from section 4 are scaffolded in `packages/contracts/contracts`.
-- **Domain models and demo data** are centralized in `packages/shared-types` and `packages/config` so each workspace starts from the same protocol vocabulary.
+| Contract | Address | Role |
+|----------|---------|------|
+| `PolicyVault` | [`0xc08e3108c9Af78D17775dEA61398DE95d2b578B0`](https://shannon-explorer.somnia.network/address/0xc08e3108c9Af78D17775dEA61398DE95d2b578B0) | USDC liquidity pool; mints `sLP` shares to LPs |
+| `InsuranceCore` | [`0xCF0dBb1783b2B7584AaC9C6E743E8D5DfE556592`](https://shannon-explorer.somnia.network/address/0xCF0dBb1783b2B7584AaC9C6E743E8D5DfE556592) | Products, positions, trigger initiation |
+| `ClaimProcessor` | [`0x2C2c409770Af2C0125142CFBb40027C1f77341f7`](https://shannon-explorer.somnia.network/address/0x2C2c409770Af2C0125142CFBb40027C1f77341f7) | Receives agent consensus; executes payouts |
+| `AgentOrchestrator` | [`0x48faeBA1046d91599bE693513b969F52a5d557c4`](https://shannon-explorer.somnia.network/address/0x48faeBA1046d91599bE693513b969F52a5d557c4) | Routes requests to Somnia Agent Platform |
+| `USDC` (testnet) | `0x9c32F3827A1a99f0cf9B213de8b53eC3d57bb171` | 6-decimal test USDC |
 
-## Next Steps
+**Deployer / owner:** `0xD7Fd52209711c94A3Fcc4f3aeB3668d2Df829254`
 
-1. Replace the demo data in `packages/config` with live reads from the deployed contracts and tracker database.
-2. Flesh out the Solidity stubs into production contract logic and add the full Hardhat test suite described in the SRD.
-3. Swap the tracker's in-memory state for PostgreSQL persistence and wire in Somnia WebSocket subscriptions.
-4. Add shadcn/ui components and the live wallet flow to the frontend.
+**Somnia Agent Platform (testnet):** `0x037Bb9C718F3f7fe5eCBDB0b600D607b52706776`
+
+---
+
+## Monorepo Layout
+
+```
+.
+├── apps/
+│   ├── web/          # Vite + React frontend (RainbowKit wallet, live contract reads)
+│   └── tracker/      # Node.js off-chain monitor + REST/WebSocket API
+├── packages/
+│   ├── contracts/    # Hardhat — Solidity contracts + deploy scripts
+│   ├── shared-types/ # Domain types shared across apps
+│   └── config/       # Chain constants, ABIs, demo seed data
+├── turbo.json
+└── package.json
+```
+
+### `apps/web`
+React SPA built with Vite, Wagmi v2, and RainbowKit. Pages:
+
+- **Home** — protocol overview, live TVL / position counts, 3D agent network scene
+- **Cover** — browse depeg / rug products, set coverage amount, buy on-chain
+- **Earn** — deposit USDC as LP, view utilization tier, withdraw sLP shares
+- **Dashboard** — live position list with agent log timeline per position
+- **Analytics** — protocol-wide stats (TVL, paid claims, active products)
+
+### `apps/tracker`
+Node.js service that watches the chain and triggers agent validation batches:
+
+| Monitor | Interval | What it does |
+|---------|----------|-------------|
+| `depegMonitor` | 60 s | Polls USDC price; calls `startDepegValidationBatch` when price < 0.97 |
+| `rugMonitor` | 90 s | Polls pool liquidity; calls `startRugValidationBatch` when below threshold |
+| `expiryMonitor` | 5 min | Cancels expired positions on-chain |
+| `pendingMonitor` | 2 min | Retries stuck pending positions |
+
+The tracker also exposes a REST + WebSocket API used by the frontend for live position data and agent log events.
+
+### `packages/contracts`
+Hardhat workspace. Key contracts:
+
+- **`PolicyVault.sol`** — ERC-20 LP shares (`sLP`); dynamic yield multiplier (1×–3×) based on utilization
+- **`InsuranceCore.sol`** — product registry, position lifecycle, trigger initiation
+- **`ClaimProcessor.sol`** — permissioned by `AgentOrchestrator`; writes claim + calls vault payout
+- **`AgentOrchestrator.sol`** — 3-step pipeline implementation; callback handlers for each agent type
+
+---
+
+## Local Development
+
+### Prerequisites
+
+- Node.js ≥ 18, Yarn ≥ 1.22
+- An RPC endpoint for Somnia Testnet (`https://dream-rpc.somnia.network`)
+- A funded testnet wallet (STT for gas, testnet USDC)
+
+### Install
+
+```bash
+yarn install
+```
+
+### Environment
+
+**`packages/contracts/.env`**
+```
+PRIVATE_KEY=0x...
+RPC_URL=https://dream-rpc.somnia.network
+USDC_ADDRESS=0x9c32F3827A1a99f0cf9B213de8b53eC3d57bb171
+```
+
+**`apps/tracker/.env`**
+```
+TRACKER_PRIVATE_KEY=0x...
+RPC_URL=https://dream-rpc.somnia.network
+CORE_ADDRESS=0xCF0dBb1783b2B7584AaC9C6E743E8D5DfE556592
+VAULT_ADDRESS=0xc08e3108c9Af78D17775dEA61398DE95d2b578B0
+AGENT_ORCHESTRATOR_ADDRESS=0x48faeBA1046d91599bE693513b969F52a5d557c4
+PORT=4000
+```
+
+**`apps/web/.env.local`**
+```
+VITE_CORE_ADDRESS=0xCF0dBb1783b2B7584AaC9C6E743E8D5DfE556592
+VITE_VAULT_ADDRESS=0xc08e3108c9Af78D17775dEA61398DE95d2b578B0
+VITE_USDC_ADDRESS=0x9c32F3827A1a99f0cf9B213de8b53eC3d57bb171
+VITE_ORCHESTRATOR_ADDRESS=0x48faeBA1046d91599bE693513b969F52a5d557c4
+VITE_TRACKER_URL=http://localhost:4000
+```
+
+### Run
+
+```bash
+# Frontend (http://localhost:5173)
+yarn web:dev
+
+# Tracker service (http://localhost:4000)
+yarn tracker:dev
+```
+
+### Compile & deploy contracts
+
+```bash
+# Compile
+yarn contracts:compile
+
+# Deploy to Somnia testnet (already deployed — only needed for fresh deploys)
+yarn workspace @sentri/contracts hardhat run scripts/deploy.ts --network somnia
+```
+
+### Set agent IDs (post-deploy)
+
+After obtaining agent IDs from [agents.somnia.network](https://agents.somnia.network), wire them into the orchestrator:
+
+```bash
+yarn workspace @sentri/contracts hardhat run scripts/setAgentIds.ts --network somnia
+```
+
+Or call `AgentOrchestrator.setAgentIds(jsonApiAgentId, llmAgentId)` directly.
+
+---
+
+## LP Yield Model
+
+LPs earn premiums dynamically scaled by pool utilization:
+
+| Utilization | Multiplier |
+|-------------|-----------|
+| < 50 % | 1× |
+| 50 – 70 % | 1.5× |
+| 70 – 90 % | 2× |
+| > 90 % | 3× |
+
+Higher utilization means more capital at risk, so the protocol rewards LPs accordingly. The multiplier is applied at deposit time and stored in `PolicyVault.utilizationMultiplierBps`.
+
+---
+
+## Payout Logic
+
+**Depeg (proportional):**
+```
+payout = coverage × (threshold − triggerPrice) / threshold
+```
+Example: $5,000 coverage, threshold $0.97, USDC at $0.90 → payout ≈ $360
+
+**Rug pull (binary):**
+```
+payout = coverage (full)
+```
+A confirmed rug is near-total loss; proportional payouts would be meaningless.
+
+---
+
+## Tech Stack
+
+| Layer | Stack |
+|-------|-------|
+| Smart contracts | Solidity 0.8.24, Hardhat, OpenZeppelin |
+| Agent platform | Somnia Agents (JSON API + LLM inference agents) |
+| Frontend | React 18, Vite, Wagmi v2, RainbowKit, Framer Motion |
+| Tracker | Node.js, TypeScript, viem |
+| Monorepo | Yarn Workspaces, Turborepo |
+| Deployment | Railway (web + tracker), Somnia Testnet |
