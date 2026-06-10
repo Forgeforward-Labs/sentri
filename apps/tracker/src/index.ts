@@ -96,6 +96,23 @@ async function bootstrap() {
 
             for (const p of newProducts) if (p) positionService.applyChainProduct(p);
             for (const p of updatedPositions) if (p) positionService.applyChainPosition(p);
+
+            // Re-read products affected by position changes so totalCommitted stays fresh
+            // (expiry/claim reduces product.totalCommitted on-chain but no product event fires)
+            if (changedPositionIds.length > 0) {
+              const affectedProductIds = [
+                ...new Set(
+                  updatedPositions
+                    .filter((p): p is NonNullable<typeof p> => p !== null)
+                    .map((p) => Number(p.productId)),
+                ),
+              ];
+              const refreshedProducts = await Promise.all(
+                affectedProductIds.map((id) => contractService.getProduct(id).catch(() => null)),
+              );
+              for (const p of refreshedProducts) if (p) positionService.applyChainProduct(p);
+            }
+
             positionService.applyChainStats(chainStats);
 
             await databaseService.setLastIndexedBlock(toBlock);
