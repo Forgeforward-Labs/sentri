@@ -6,7 +6,7 @@ import {
   CORE_ADDRESS,
   ORCHESTRATOR_ADDRESS,
   OWNER_ADDRESS,
-  USDC_DECIMALS,
+  USDSO_DECIMALS,
   INSURANCE_CORE_ADMIN_ABI,
   ORCHESTRATOR_ADMIN_ABI,
 } from '../lib/contracts'
@@ -109,8 +109,8 @@ function CreateDepegSection() {
           BigInt(Math.round((parseFloat(threshold) / 100) * 1e18)),
           BigInt(premiumBps),
           BigInt(Math.round(parseFloat(durationHours) * 3600)),
-          parseUnits(maxPosUsd, USDC_DECIMALS),
-          parseUnits(poolLimitUsd, USDC_DECIMALS),
+          parseUnits(maxPosUsd, USDSO_DECIMALS),
+          parseUnits(poolLimitUsd, USDSO_DECIMALS),
         ],
       },
       { onError: (err) => toast.error(err.message.split('\n')[0]) },
@@ -130,9 +130,9 @@ function CreateDepegSection() {
         <Field label="Depeg Threshold (%)" value={threshold} onChange={setThreshold} type="number" placeholder="97" />
         <Field label="Premium Rate (bps)" value={premiumBps} onChange={setPremiumBps} type="number" placeholder="100" />
         <Field label="Duration (hours)" value={durationHours} onChange={setDurationHours} type="number" placeholder="720" />
-        <Field label="Max Per Position (USDC)" value={maxPosUsd} onChange={setMaxPosUsd} type="number" placeholder="10000" />
+        <Field label="Max Per Position (USDso)" value={maxPosUsd} onChange={setMaxPosUsd} type="number" placeholder="10000" />
         <div className="col-span-2">
-          <Field label="Pool Limit (USDC)" value={poolLimitUsd} onChange={setPoolLimitUsd} type="number" placeholder="100000" />
+          <Field label="Pool Limit (USDso)" value={poolLimitUsd} onChange={setPoolLimitUsd} type="number" placeholder="100000" />
         </div>
       </div>
       <TxButton label="Create Depeg Product" onClick={submit} walletPending={isPending} confirming={confirming} />
@@ -183,9 +183,9 @@ function CreateRugSection() {
           BigInt(Math.round(parseFloat(liquidityThreshold) * 100)),
           BigInt(premiumBps),
           BigInt(Math.round(parseFloat(durationHours) * 3600)),
-          parseUnits(maxPosUsd, USDC_DECIMALS),
-          parseUnits(poolLimitUsd, USDC_DECIMALS),
-          parseUnits(referenceTvlUsd, USDC_DECIMALS),
+          parseUnits(maxPosUsd, USDSO_DECIMALS),
+          parseUnits(poolLimitUsd, USDSO_DECIMALS),
+          parseUnits(referenceTvlUsd, USDSO_DECIMALS),
         ],
       },
       { onError: (err) => toast.error(err.message.split('\n')[0]) },
@@ -208,10 +208,10 @@ function CreateRugSection() {
         <Field label="Liquidity Threshold (%)" value={liquidityThreshold} onChange={setLiquidityThreshold} type="number" placeholder="20" />
         <Field label="Annual Premium Rate (bps)" value={premiumBps} onChange={setPremiumBps} type="number" placeholder="200" />
         <Field label="Duration (hours)" value={durationHours} onChange={setDurationHours} type="number" placeholder="720" />
-        <Field label="Max Per Position (USDC)" value={maxPosUsd} onChange={setMaxPosUsd} type="number" placeholder="5000" />
-        <Field label="Pool Limit (USDC)" value={poolLimitUsd} onChange={setPoolLimitUsd} type="number" placeholder="50000" />
+        <Field label="Max Per Position (USDso)" value={maxPosUsd} onChange={setMaxPosUsd} type="number" placeholder="5000" />
+        <Field label="Pool Limit (USDso)" value={poolLimitUsd} onChange={setPoolLimitUsd} type="number" placeholder="50000" />
         <div className="col-span-2">
-          <Field label="Reference TVL (USDC)" value={referenceTvlUsd} onChange={setReferenceTvlUsd} type="number" placeholder="1000000" />
+          <Field label="Reference TVL (USDso)" value={referenceTvlUsd} onChange={setReferenceTvlUsd} type="number" placeholder="1000000" />
         </div>
       </div>
       <TxButton label="Create Rug Product" onClick={submit} walletPending={isPending} confirming={confirming} />

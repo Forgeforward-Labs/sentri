@@ -260,7 +260,7 @@ export default function PositionDetailPage() {
                 </span>
               </DetailRow>
               <DetailRow label="Premium paid">
-                ${position.premiumUsd.toFixed(2)} USDC
+                ${position.premiumUsd.toFixed(2)} USDso
               </DetailRow>
               <DetailRow label="Created">
                 <span className="text-xs">{formatDate(position.createdAt)}</span>

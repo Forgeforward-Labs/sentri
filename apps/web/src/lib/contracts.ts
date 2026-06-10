@@ -5,13 +5,13 @@
 
 export const CORE_ADDRESS          = import.meta.env.VITE_CORE_ADDRESS          as `0x${string}` | undefined;
 export const VAULT_ADDRESS         = import.meta.env.VITE_VAULT_ADDRESS         as `0x${string}` | undefined;
-export const USDC_ADDRESS          = import.meta.env.VITE_USDC_ADDRESS          as `0x${string}` | undefined;
+export const USDSO_ADDRESS         = import.meta.env.VITE_USDSO_ADDRESS         as `0x${string}` | undefined;
 export const ORCHESTRATOR_ADDRESS  = import.meta.env.VITE_ORCHESTRATOR_ADDRESS  as `0x${string}` | undefined;
 export const TRACKER_URL           = import.meta.env.VITE_TRACKER_URL           ?? "http://localhost:4000";
 // Deployer / owner of all contracts
 export const OWNER_ADDRESS         = "0xD7Fd52209711c94A3Fcc4f3aeB3668d2Df829254" as `0x${string}`;
 
-export const USDC_DECIMALS  = 6;
+export const USDSO_DECIMALS = 13; // USDso: 18 decimals, 1 USDso = $100 000 → $1 = 1e13 raw
 export const WAD             = BigInt(1e18);
 
 // ── ABIs ────────────────────────────────────────────────────────

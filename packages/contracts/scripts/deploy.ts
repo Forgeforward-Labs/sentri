@@ -13,15 +13,15 @@ async function main() {
   const { ethers } = hre;
   const [deployer] = await ethers.getSigners();
 
-  const usdcAddress = process.env.USDC_ADDRESS;
-  if (!usdcAddress) throw new Error("USDC_ADDRESS must be set.");
+  const usdsoAddress = process.env.USDSO_ADDRESS;
+  if (!usdsoAddress) throw new Error("USDSO_ADDRESS must be set.");
 
   console.log("Deploying with account:", deployer.address);
   console.log("Account balance (STT):", ethers.formatEther(await ethers.provider.getBalance(deployer.address)));
 
   // 1. PolicyVault
   const vaultFactory = await ethers.getContractFactory("PolicyVault");
-  const vault = await vaultFactory.deploy(usdcAddress);
+  const vault = await vaultFactory.deploy(usdsoAddress);
   await vault.waitForDeployment();
   console.log("PolicyVault:", await vault.getAddress());
 
@@ -94,8 +94,8 @@ async function main() {
     DEPEG_THRESHOLD,
     400,                            // 4.0% p.a.
     86400 * 30,                     // 30 days
-    ethers.parseUnits("5000", 6),   // max $5 000 per position
-    ethers.parseUnits("200000", 6), // pool limit $200 k
+    ethers.parseUnits("5000", 13),   // max $5 000 per position
+    ethers.parseUnits("200000", 13), // pool limit $200 k
   );
   await depeg30dTx.wait();
 
@@ -108,8 +108,8 @@ async function main() {
     DEPEG_THRESHOLD,
     350,                            // 3.5% p.a.
     86400 * 90,                     // 90 days
-    ethers.parseUnits("10000", 6),  // max $10 000 per position
-    ethers.parseUnits("300000", 6), // pool limit $300 k
+    ethers.parseUnits("10000", 13),  // max $10 000 per position
+    ethers.parseUnits("300000", 13), // pool limit $300 k
   );
   await depeg90dTx.wait();
 
@@ -124,9 +124,9 @@ async function main() {
     5000,                           // trigger when ≤ 50 % liquidity remains
     1200,                           // 12% p.a.
     86400 * 30,                     // 30 days
-    ethers.parseUnits("3000", 6),   // max $3 000 per position
-    ethers.parseUnits("100000", 6), // pool limit $100 k
-    ethers.parseUnits("500000", 6), // reference TVL $500 k
+    ethers.parseUnits("3000", 13),   // max $3 000 per position
+    ethers.parseUnits("100000", 13), // pool limit $100 k
+    ethers.parseUnits("500000", 13), // reference TVL $500 k
   );
   await rugTx.wait();
 
@@ -138,8 +138,8 @@ async function main() {
     DEPEG_THRESHOLD,
     400,                            // 4.0% p.a. (same as 30d; premium will floor at $1)
     3600,                           // 1 hour
-    ethers.parseUnits("5000", 6),   // max $5 000 per position
-    ethers.parseUnits("50000", 6),  // pool limit $50 k
+    ethers.parseUnits("5000", 13),   // max $5 000 per position
+    ethers.parseUnits("50000", 13),  // pool limit $50 k
   );
   await depeg1hTx.wait();
 
@@ -165,7 +165,7 @@ async function main() {
   console.log("\n=== Add to apps/web/.env.local ===");
   console.log(`VITE_CORE_ADDRESS=${addresses.InsuranceCore}`);
   console.log(`VITE_VAULT_ADDRESS=${addresses.PolicyVault}`);
-  console.log(`VITE_USDC_ADDRESS=${usdcAddress}`);
+  console.log(`VITE_USDSO_ADDRESS=${usdsoAddress}`);
 }
 
 main().catch((error) => {

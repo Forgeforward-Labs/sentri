@@ -166,7 +166,7 @@ async function bootstrap() {
             timestamp: new Date().toISOString(),
             agent: "AGENT_3",
             action: "Trigger verified — payout initiated",
-            data: `Confirmed price: ${Number(confirmedPrice) / 1e18} | Payout: $${Number(payout) / 1e6}`,
+            data: `Confirmed price: ${Number(confirmedPrice) / 1e18} | Payout: $${Number(payout) / 1e13}`,
             txHash: txHash ?? null,
           });
           // Refresh position status

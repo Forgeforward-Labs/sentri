@@ -25,8 +25,8 @@ const STATUS_MAP: Record<0 | 1 | 2 | 3, Position["status"]> = {
   3: "EXPIRED",
 };
 
-const USDC_DECIMALS = 6;
-const toUsd = (raw: bigint) => Number(raw) / 10 ** USDC_DECIMALS;
+const USDSO_DECIMALS = 13; // USDso: 18 decimals, 1 USDso = $100 000 → $1 = 1e13 raw
+const toUsd = (raw: bigint) => Number(raw) / 10 ** USDSO_DECIMALS;
 const wadToNumber = (raw: bigint) => Number(raw) / 1e18;
 
 function chainProductToProduct(p: ChainProduct): Product {

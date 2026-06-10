@@ -5,20 +5,20 @@ import { toast } from 'sonner'
 import { TrendingUp, Lock, BarChart2, Percent } from 'lucide-react'
 import { formatUsd, cn } from '../lib/utils'
 import {
-  VAULT_ADDRESS, USDC_ADDRESS,
-  USDC_DECIMALS, ERC20_ABI, POLICY_VAULT_ABI,
+  VAULT_ADDRESS, USDSO_ADDRESS,
+  USDSO_DECIMALS, ERC20_ABI, POLICY_VAULT_ABI,
 } from '../lib/contracts'
 import { useProducts } from '../lib/useTrackerData'
 
 function computePositionUsd(shareBalance: bigint | undefined, shareValue: bigint | undefined): number {
   if (!shareBalance || !shareValue) return 0
-  return Number(formatUnits((shareBalance * shareValue) / 10n ** 18n, USDC_DECIMALS))
+  return Number(formatUnits((shareBalance * shareValue) / 10n ** 18n, USDSO_DECIMALS))
 }
 
 function computeEstimatedShares(depositRaw: bigint, shareValue: bigint | undefined): string {
   if (!shareValue || shareValue === 0n || depositRaw === 0n) return '—'
   const shares = (depositRaw * 10n ** 18n) / shareValue
-  return Number(formatUnits(shares, USDC_DECIMALS)).toFixed(4)
+  return Number(formatUnits(shares, USDSO_DECIMALS)).toFixed(4)
 }
 
 const tiers = [
@@ -61,8 +61,8 @@ export default function EarnPage() {
   const shareValue      = vaultData?.[3].result ?? 10n ** 18n
 
   const utilizationPct    = Number(utilizationBps) / 100
-  const totalDepositedUsd = Number(formatUnits(totalDeposited, USDC_DECIMALS))
-  const totalLockedUsd    = Number(formatUnits(totalLocked, USDC_DECIMALS))
+  const totalDepositedUsd = Number(formatUnits(totalDeposited, USDSO_DECIMALS))
+  const totalLockedUsd    = Number(formatUnits(totalLocked, USDSO_DECIMALS))
   const svNum             = Number(shareValue) / 1e18
 
   const { data: products } = useProducts()
@@ -90,28 +90,28 @@ export default function EarnPage() {
     query: { enabled: Boolean(address && VAULT_ADDRESS) },
   })
 
-  const { data: usdcBalance, refetch: refetchUsdc } = useReadContract({
-    address: USDC_ADDRESS,
+  const { data: usdsoBalance, refetch: refetchUsdso } = useReadContract({
+    address: USDSO_ADDRESS,
     abi: ERC20_ABI,
     functionName: 'balanceOf',
     args: [address ?? '0x'],
-    query: { enabled: Boolean(address && USDC_ADDRESS) },
+    query: { enabled: Boolean(address && USDSO_ADDRESS) },
   })
 
   const positionUsd   = computePositionUsd(shareBalance, shareValue)
-  const sharesDisplay = shareBalance ? Number(formatUnits(shareBalance, USDC_DECIMALS)).toFixed(4) : '0.0000'
-  const usdcDisplay   = usdcBalance  ? Number(formatUnits(usdcBalance, USDC_DECIMALS)).toFixed(2)  : '0.00'
+  const sharesDisplay = shareBalance ? Number(formatUnits(shareBalance, USDSO_DECIMALS)).toFixed(4) : '0.0000'
+  const usdsoDisplay   = usdsoBalance  ? Number(formatUnits(usdsoBalance, USDSO_DECIMALS)).toFixed(2)  : '0.00'
 
   const { data: allowance, refetch: refetchAllowance } = useReadContract({
-    address: USDC_ADDRESS,
+    address: USDSO_ADDRESS,
     abi: ERC20_ABI,
     functionName: 'allowance',
     args: [address ?? '0x', VAULT_ADDRESS ?? '0x'],
-    query: { enabled: Boolean(address && USDC_ADDRESS && VAULT_ADDRESS) },
+    query: { enabled: Boolean(address && USDSO_ADDRESS && VAULT_ADDRESS) },
   })
 
   const depositRaw = parseFloat(depositAmount) > 0
-    ? parseUnits(parseFloat(depositAmount).toFixed(6), USDC_DECIMALS)
+    ? parseUnits(parseFloat(depositAmount).toFixed(6), USDSO_DECIMALS)
     : 0n
   const needsApproval = allowance !== undefined && depositRaw > 0n && allowance < depositRaw
 
@@ -119,7 +119,7 @@ export default function EarnPage() {
   const { isLoading: approveConfirming, isSuccess: approveSuccess } = useWaitForTransactionReceipt({ hash: approveTxHash })
 
   useEffect(() => {
-    if (approveSuccess) { toast.success('USDC approved!'); void refetchAllowance() }
+    if (approveSuccess) { toast.success('USDso approved!'); void refetchAllowance() }
   }, [approveSuccess, refetchAllowance])
 
   const { writeContract: deposit, data: depositTxHash, isPending: depositPending } = useWriteContract()
@@ -129,9 +129,9 @@ export default function EarnPage() {
     if (depositSuccess) {
       toast.success('Deposit confirmed!')
       setDepositAmount('')
-      void Promise.all([refetchVault(), refetchShares(), refetchUsdc()])
+      void Promise.all([refetchVault(), refetchShares(), refetchUsdso()])
     }
-  }, [depositSuccess, refetchVault, refetchShares, refetchUsdc])
+  }, [depositSuccess, refetchVault, refetchShares, refetchUsdso])
 
   const { writeContract: withdraw, data: withdrawTxHash, isPending: withdrawPending } = useWriteContract()
   const { isLoading: withdrawConfirming, isSuccess: withdrawSuccess } = useWaitForTransactionReceipt({ hash: withdrawTxHash })
@@ -140,18 +140,18 @@ export default function EarnPage() {
     if (withdrawSuccess) {
       toast.success('Withdrawal confirmed!')
       setWithdrawAmount('')
-      void Promise.all([refetchVault(), refetchShares(), refetchUsdc()])
+      void Promise.all([refetchVault(), refetchShares(), refetchUsdso()])
     }
-  }, [withdrawSuccess, refetchVault, refetchShares, refetchUsdc])
+  }, [withdrawSuccess, refetchVault, refetchShares, refetchUsdso])
 
   function handleDeposit() {
-    if (!VAULT_ADDRESS || !USDC_ADDRESS) { toast.error('Contract not configured'); return }
+    if (!VAULT_ADDRESS || !USDSO_ADDRESS) { toast.error('Contract not configured'); return }
     if (depositRaw === 0n) { toast.error('Enter a deposit amount'); return }
-    if (usdcBalance !== undefined && depositRaw > usdcBalance) { toast.error('Insufficient USDC balance'); return }
+    if (usdsoBalance !== undefined && depositRaw > usdsoBalance) { toast.error('Insufficient USDso balance'); return }
 
     if (needsApproval) {
       approve(
-        { address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'approve', args: [VAULT_ADDRESS, depositRaw * 10n] },
+        { address: USDSO_ADDRESS, abi: ERC20_ABI, functionName: 'approve', args: [VAULT_ADDRESS, depositRaw * 10n] },
         { onError: (e) => toast.error(e.message.split('\n')[0]) },
       )
     } else {
@@ -165,7 +165,7 @@ export default function EarnPage() {
   function handleWithdraw() {
     if (!VAULT_ADDRESS) { toast.error('Contract not configured'); return }
     const withdrawRaw = parseFloat(withdrawAmount) > 0
-      ? parseUnits(parseFloat(withdrawAmount).toFixed(6), USDC_DECIMALS)
+      ? parseUnits(parseFloat(withdrawAmount).toFixed(6), USDSO_DECIMALS)
       : 0n
     if (withdrawRaw === 0n) { toast.error('Enter a withdrawal amount'); return }
     if (shareBalance !== undefined && withdrawRaw > shareBalance) { toast.error('Insufficient share balance'); return }
@@ -177,7 +177,7 @@ export default function EarnPage() {
   }
 
   const estimatedShares = computeEstimatedShares(depositRaw, shareValue)
-  const estimatedUsdc   = parseFloat(withdrawAmount) > 0
+  const estimatedUsdso  = parseFloat(withdrawAmount) > 0
     ? formatUsd(parseFloat(withdrawAmount) * svNum)
     : '—'
 
@@ -188,7 +188,7 @@ export default function EarnPage() {
                        approveConfirming ? 'Approving…'           :
                        depositPending    ? 'Confirm in wallet…'  :
                        depositConfirming ? 'Confirming…'          :
-                       needsApproval     ? 'Approve USDC'         : 'Deposit'
+                       needsApproval     ? 'Approve USDso'        : 'Deposit'
 
   const withdrawLabel = withdrawPending    ? 'Confirm in wallet…' :
                         withdrawConfirming ? 'Confirming…'         : 'Withdraw'
@@ -300,13 +300,13 @@ export default function EarnPage() {
             {isConnected && (
               <div className="text-right">
                 <p className="text-slate-600 text-[10px] uppercase tracking-wider">Balance</p>
-                <p className="text-slate-300 text-sm font-medium">${usdcDisplay}</p>
+                <p className="text-slate-300 text-sm font-medium">${usdsoDisplay}</p>
               </div>
             )}
           </div>
 
           <div>
-            <label className="text-xs text-slate-500 mb-1.5 block">Amount (USDC)</label>
+            <label className="text-xs text-slate-500 mb-1.5 block">Amount (USDso)</label>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm select-none">$</span>
               <input
@@ -317,15 +317,15 @@ export default function EarnPage() {
                 className="input-base pl-7 pr-20 py-3"
               />
               <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
-                {isConnected && usdcBalance !== undefined && (
+                {isConnected && usdsoBalance !== undefined && (
                   <button
-                    onClick={() => setDepositAmount(formatUnits(usdcBalance, USDC_DECIMALS))}
+                    onClick={() => setDepositAmount(formatUnits(usdsoBalance, USDSO_DECIMALS))}
                     className="text-xs text-brand-400 hover:text-brand-300 px-2 py-0.5 rounded-md hover:bg-brand-500/10 transition-colors font-medium"
                   >
                     Max
                   </button>
                 )}
-                <span className="text-slate-500 text-xs">USDC</span>
+                <span className="text-slate-500 text-xs">USDso</span>
               </div>
             </div>
           </div>
@@ -385,7 +385,7 @@ export default function EarnPage() {
               />
               {isConnected && shareBalance !== undefined && (
                 <button
-                  onClick={() => setWithdrawAmount(formatUnits(shareBalance, USDC_DECIMALS))}
+                  onClick={() => setWithdrawAmount(formatUnits(shareBalance, USDSO_DECIMALS))}
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-brand-400 hover:text-brand-300 px-2 py-0.5 rounded-md hover:bg-brand-500/10 transition-colors font-medium"
                 >
                   Max
@@ -397,8 +397,8 @@ export default function EarnPage() {
           {parseFloat(withdrawAmount) > 0 && (
             <div className="bg-slate-800/50 rounded-xl p-3.5 text-sm border border-slate-700/40">
               <div className="flex justify-between">
-                <span className="text-slate-400">Estimated USDC</span>
-                <span className="text-white font-medium tabular-nums">{estimatedUsdc}</span>
+                <span className="text-slate-400">Estimated USDso</span>
+                <span className="text-white font-medium tabular-nums">{estimatedUsdso}</span>
               </div>
             </div>
           )}

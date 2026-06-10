@@ -13,7 +13,7 @@ import { formatUsd, cn } from "../lib/utils";
 import {
   CORE_ADDRESS,
   VAULT_ADDRESS,
-  USDC_DECIMALS,
+  USDSO_DECIMALS,
   INSURANCE_CORE_ABI,
   POLICY_VAULT_ABI,
 } from "../lib/contracts";
@@ -33,7 +33,7 @@ function BuyCoverageButton({
   disabled: boolean;
 }) {
   const parsedAmount = parseFloat(coverageAmount) || 0;
-  const amountRaw = parseUnits(parsedAmount?.toString(), USDC_DECIMALS);
+  const amountRaw = parseUnits(parsedAmount?.toString(), USDSO_DECIMALS);
 
   const {
     writeContract: buy,
@@ -110,7 +110,7 @@ function PremiumCalculator({ product }: { product: Product }) {
 
   const vaultAvailableUsd =
     availLiqRaw !== undefined
-      ? Number(formatUnits(availLiqRaw as bigint, USDC_DECIMALS))
+      ? Number(formatUnits(availLiqRaw as bigint, USDSO_DECIMALS))
       : null;
   const multiplier = multiplierBpsRaw !== undefined ? Number(multiplierBpsRaw) / 10000 : 1;
 
@@ -147,7 +147,7 @@ function PremiumCalculator({ product }: { product: Product }) {
       </p>
       <div>
         <label className="text-xs text-slate-500 mb-1.5 block">
-          Coverage Amount (USDC)
+          Coverage Amount (USDso)
         </label>
         <div className="relative">
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm select-none">
@@ -183,7 +183,7 @@ function PremiumCalculator({ product }: { product: Product }) {
           <div className="flex justify-between items-center">
             <span className="text-slate-400">Premium</span>
             <span className="text-white font-semibold">
-              ${premium.toFixed(2)} USDC
+              ${premium.toFixed(2)} USDso
               {multiplier > 1 && (
                 <span className="text-amber-400 text-xs ml-1.5 font-normal">
                   ({multiplier}× util)
