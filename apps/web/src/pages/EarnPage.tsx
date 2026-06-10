@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract, useReadContracts } from 'wagmi'
 import { parseUnits, formatUnits } from 'viem'
 import { toast } from 'sonner'
@@ -7,6 +7,7 @@ import {
   VAULT_ADDRESS, USDC_ADDRESS,
   USDC_DECIMALS, ERC20_ABI, POLICY_VAULT_ABI,
 } from '../lib/contracts'
+import { useProducts } from '../lib/useTrackerData'
 
 // shareValue() returns WAD (1e18-based) where 1e18 = 1 USDC/share at par.
 // Shares are minted 1:1 with USDC amounts (6-decimal scale).
@@ -68,9 +69,27 @@ export default function EarnPage() {
   const totalLockedUsd    = Number(formatUnits(totalLocked, USDC_DECIMALS))
   const svNum             = Number(shareValue) / 1e18 // USDC per share (display)
 
-  // APY heuristic matching tracker
-  const utilizationFrac = Number(utilizationBps) / 10000
-  const apyEstimate     = Math.min(utilizationFrac * 60, 80)
+  // ── Products for APY calculation ──────────────────────────────
+  const { data: products } = useProducts()
+
+  // Weighted avg premium rate (bps) by committed coverage.
+  // Falls back to pool-limit weighting when no coverage is sold yet.
+  const weightedAvgRateBps = useMemo(() => {
+    if (!products || products.length === 0) return 300
+    const totalCommitted = products.reduce((s, p) => s + p.totalCommittedUsd, 0)
+    if (totalCommitted === 0) {
+      const totalLimit = products.reduce((s, p) => s + p.poolLimitUsd, 0)
+      if (totalLimit === 0) return 300
+      return products.reduce((s, p) => s + p.premiumRateBps * p.poolLimitUsd, 0) / totalLimit
+    }
+    return products.reduce((s, p) => s + p.premiumRateBps * p.totalCommittedUsd, 0) / totalCommitted
+  }, [products])
+
+  // APY = utilization × weighted avg rate × utilization multiplier
+  // Multiplier mirrors PolicyVault.utilizationMultiplierBps() tiers
+  const utilizationFrac   = Number(utilizationBps) / 10000
+  const multiplierFactor  = utilizationPct < 50 ? 1 : utilizationPct < 70 ? 1.5 : utilizationPct < 90 ? 2 : 3
+  const apyEstimate       = utilizationFrac * (weightedAvgRateBps / 100) * multiplierFactor
 
   // ── User balances ──────────────────────────────────────────────
   const { data: shareBalance, refetch: refetchShares } = useReadContract({

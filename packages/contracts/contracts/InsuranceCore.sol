@@ -8,6 +8,7 @@ interface IPolicyVaultCore {
     function lockFunds(uint256 positionId, uint256 amount, uint256 premium) external;
     function unlockFunds(uint256 positionId) external;
     function refundPremium(uint256 positionId, address holder) external;
+    function utilizationMultiplierBps() external view returns (uint256);
 }
 
 interface IAgentOrchestratorCore {
@@ -85,6 +86,8 @@ contract InsuranceCore is Ownable {
 
     mapping(uint256 => Product) public products;
     mapping(uint256 => Position) public positions;
+    /// @notice Total coverage committed per holder per product (used for per-holder cap).
+    mapping(uint256 => mapping(address => uint256)) public committedByHolder;
 
     event ProductCreated(uint256 indexed id, string name, TriggerType triggerType);
     event ProductPaused(uint256 indexed id, string reason);
@@ -106,7 +109,7 @@ contract InsuranceCore is Ownable {
     error OnlyClaimProcessor();
     error ProductInactive();
     error PositionStateInvalid();
-    error CoverageTooHigh();
+    error PerHolderLimitReached();
     error PoolLimitReached();
     error InsufficientLiquidity();
     error EmptyBatch();
@@ -178,10 +181,12 @@ contract InsuranceCore is Ownable {
         address pool,
         uint256 liquidityThreshold,
         uint256 premiumRateBps,
+        uint256 duration,
         uint256 maxPerPosition,
         uint256 poolLimit,
         uint256 referenceTVL
     ) external onlyOwner returns (uint256 productId) {
+        require(duration > 0, "duration must be non-zero");
         productId = ++productCount;
         products[productId] = Product({
             id: productId,
@@ -189,7 +194,7 @@ contract InsuranceCore is Ownable {
             triggerType: TriggerType.RUG,
             triggerParams: abi.encode(RugParams({token: token, pool: pool, liquidityThreshold: liquidityThreshold})),
             premiumRateBps: premiumRateBps,
-            duration: 0,
+            duration: duration,
             maxPerPosition: maxPerPosition,
             poolLimit: poolLimit,
             totalCommitted: 0,
@@ -212,7 +217,7 @@ contract InsuranceCore is Ownable {
     function buyPosition(uint256 productId, uint256 coverageAmount) external returns (uint256 positionId) {
         Product storage product = products[productId];
         if (!product.active) revert ProductInactive();
-        if (coverageAmount > product.maxPerPosition) revert CoverageTooHigh();
+        if (committedByHolder[productId][msg.sender] + coverageAmount > product.maxPerPosition) revert PerHolderLimitReached();
         if (product.totalCommitted + coverageAmount > product.poolLimit) revert PoolLimitReached();
         if (vault.availableLiquidity() < coverageAmount) revert InsufficientLiquidity();
 
@@ -234,6 +239,7 @@ contract InsuranceCore is Ownable {
         });
 
         product.totalCommitted += coverageAmount;
+        committedByHolder[productId][msg.sender] += coverageAmount;
         vault.lockFunds(positionId, coverageAmount, premium);
 
         emit PositionCreated(positionId, msg.sender, productId, coverageAmount);
@@ -245,6 +251,7 @@ contract InsuranceCore is Ownable {
 
         position.status = PositionStatus.EXPIRED;
         products[position.productId].totalCommitted -= position.coverageAmount;
+        committedByHolder[position.productId][position.holder] -= position.coverageAmount;
         vault.unlockFunds(positionId);
 
         emit PositionExpired(positionId);
@@ -341,8 +348,25 @@ contract InsuranceCore is Ownable {
         position.status = PositionStatus.CLAIMED;
         position.claimedPayout = payout;
         products[position.productId].totalCommitted -= position.coverageAmount;
+        committedByHolder[position.productId][position.holder] -= position.coverageAmount;
 
         emit PositionClaimed(positionId, payout, position.claimedPrice);
+    }
+
+    /// @notice Demo helper — owner can manually fire a depeg claim for all active positions
+    ///         in a product using any observed price (bypasses tracker requirement).
+    function adminInitiateDepeg(uint256 productId, uint256 observedPrice) external onlyOwner {
+        uint256[] memory batch = new uint256[](positionCount);
+        uint256 count = 0;
+        for (uint256 i = 1; i <= positionCount; i++) {
+            if (positions[i].productId == productId && positions[i].status == PositionStatus.ACTIVE) {
+                batch[count++] = i;
+            }
+        }
+        require(count > 0, "no active positions");
+        uint256[] memory trimmed = new uint256[](count);
+        for (uint256 i = 0; i < count; i++) trimmed[i] = batch[i];
+        _initiateDepegBatch(trimmed, observedPrice);
     }
 
     function setClaimedPrice(uint256 positionId, uint256 confirmedPrice) external {
@@ -356,16 +380,12 @@ contract InsuranceCore is Ownable {
 
     function calculatePremium(uint256 productId, uint256 amount) public view returns (uint256) {
         Product storage product = products[productId];
-        uint256 premium = (amount * product.premiumRateBps) / 10_000;
-
-        if (product.duration > 1 days) {
-            premium = (premium * product.duration) / 1 days;
-        }
-
-        if (premium < 1e6) {
-            return 1e6;
-        }
-
-        return premium;
+        // Annual rate pro-rated over duration, then scaled by utilization multiplier.
+        // Multiplier rises with pool utilization (1x → 3x), boosting LP yield and
+        // dynamically repricing coverage when the pool is heavily used.
+        uint256 base = (amount * product.premiumRateBps * product.duration) / (10_000 * 365 days);
+        uint256 multiplier = vault.utilizationMultiplierBps(); // 10_000 / 15_000 / 20_000 / 30_000
+        uint256 premium = (base * multiplier) / 10_000;
+        return premium < 1e6 ? 1e6 : premium;
     }
 }

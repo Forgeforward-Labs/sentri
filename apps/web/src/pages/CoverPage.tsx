@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Product } from "@sentri/shared-types";
+import type { DepegParams, Product } from "@sentri/shared-types";
 import {
   useAccount,
   useWriteContract,
@@ -96,28 +96,44 @@ function PremiumCalculator({ product }: { product: Product }) {
     functionName: "availableLiquidity",
     query: { enabled: !!VAULT_ADDRESS, refetchInterval: 15_000 },
   });
+  const { data: multiplierBpsRaw } = useReadContract({
+    address: VAULT_ADDRESS,
+    abi: POLICY_VAULT_ABI,
+    functionName: "utilizationMultiplierBps",
+    query: { enabled: !!VAULT_ADDRESS, refetchInterval: 15_000 },
+  });
+
   const vaultAvailableUsd =
     availLiqRaw !== undefined
       ? Number(formatUnits(availLiqRaw as bigint, USDC_DECIMALS))
       : null;
+  const multiplier = multiplierBpsRaw !== undefined ? Number(multiplierBpsRaw) / 10000 : 1;
 
   const parsedAmount = parseFloat(amount) || 0;
 
-  // Mirror InsuranceCore.calculatePremium exactly:
-  // 1. base = amount × premiumRateBps / 10_000
-  // 2. if duration > 1 day, multiply by (duration / 1 day)
-  // 3. minimum $1
-  const durationMultiplier =
-    product.durationHours && product.durationHours > 24
-      ? product.durationHours / 24
-      : 1;
-  const rawPremium =
-    ((product.premiumRateBps * parsedAmount) / 10000) * durationMultiplier;
+  // Mirror InsuranceCore.calculatePremium: annual rate × duration × utilization multiplier
+  const durationYears = (product.durationHours ?? 0) / (365 * 24);
+  const rawPremium = (product.premiumRateBps * parsedAmount * durationYears * multiplier) / 10000;
   const premium = Math.max(rawPremium, parsedAmount > 0 ? 1 : 0);
 
-  const utilPct = product.totalCommittedUsd / product.poolLimitUsd;
-  const multiplier =
-    utilPct > 0.9 ? 3 : utilPct > 0.7 ? 2 : utilPct > 0.5 ? 1.5 : 1;
+  const isDepeg = product.triggerType === "DEPEG";
+  const threshold = isDepeg
+    ? (product.triggerParams as DepegParams).threshold
+    : null;
+
+  // Three payout scenarios at increasing depeg severity
+  const depegScenarios = threshold
+    ? [
+        { price: +(threshold - 0.02).toFixed(2), label: "Minor" },
+        { price: +(threshold - 0.07).toFixed(2), label: "Moderate" },
+        { price: +(threshold - 0.15).toFixed(2), label: "Severe" },
+      ].map(({ price, label }) => ({
+        price,
+        label,
+        payout: parsedAmount > 0 ? (parsedAmount * (threshold - price)) / threshold : 0,
+        pct: ((threshold - price) / threshold) * 100,
+      }))
+    : [];
 
   const exceedsVault =
     vaultAvailableUsd !== null && parsedAmount > vaultAvailableUsd;
@@ -158,29 +174,49 @@ function PremiumCalculator({ product }: { product: Product }) {
       </div>
 
       {parsedAmount > 0 && (
-        <div className="bg-slate-800/60 rounded-lg p-3 space-y-1.5 text-sm">
+        <div className="bg-slate-800/60 rounded-lg p-3 space-y-2.5 text-sm">
           <div className="flex justify-between">
             <span className="text-slate-500">Premium</span>
             <span className="text-white font-medium">
               ${premium.toFixed(2)} USDC
+              {multiplier > 1 && (
+                <span className="text-amber-400 text-xs ml-1">({multiplier}× utilization)</span>
+              )}
             </span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-slate-500">Utilization multiplier</span>
-            <span
-              className={cn(
-                "font-medium",
-                multiplier === 1
-                  ? "text-emerald-400"
-                  : multiplier === 1.5
-                    ? "text-amber-400"
-                    : multiplier === 2
-                      ? "text-orange-400"
-                      : "text-red-400",
-              )}
-            >
-              {multiplier}x
-            </span>
+
+          <div className="border-t border-slate-700/60 pt-2">
+            {isDepeg ? (
+              <>
+                <p className="text-slate-500 text-xs mb-2">
+                  Partial payout — proportional to depeg depth, not full-loss reimbursement
+                </p>
+                {depegScenarios.map(({ price, label, payout, pct }) => (
+                  <div key={price} className="flex justify-between text-xs py-0.5">
+                    <span className="text-slate-400">
+                      {label} — USDC at ${price.toFixed(2)}
+                    </span>
+                    <span className="text-amber-400 font-medium">
+                      ${payout.toFixed(2)}{" "}
+                      <span className="text-slate-500">({pct.toFixed(1)}%)</span>
+                    </span>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <>
+                <p className="text-slate-500 text-xs mb-2">
+                  Full payout — entire coverage amount paid out on trigger
+                </p>
+                <div className="flex justify-between text-xs">
+                  <span className="text-slate-400">Pool liquidity drops ≤50%</span>
+                  <span className="text-emerald-400 font-medium">
+                    ${parsedAmount.toFixed(2)}{" "}
+                    <span className="text-slate-500">(100%)</span>
+                  </span>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -267,18 +303,21 @@ export default function CoverPage() {
                   </p>
                 </div>
                 <div className="bg-slate-800/60 rounded-lg p-3">
-                  <p className="text-slate-500 text-xs mb-1">Premium Rate</p>
+                  <p className="text-slate-500 text-xs mb-1">Annual Rate</p>
                   <p className="text-white font-semibold text-sm">
-                    {(product.premiumRateBps / 100).toFixed(2)}%
+                    {(product.premiumRateBps / 100).toFixed(2)}% p.a.
                   </p>
                 </div>
                 <div className="bg-slate-800/60 rounded-lg p-3">
                   <p className="text-slate-500 text-xs mb-1">Duration</p>
                   <p className="text-white font-semibold text-sm">
                     {product.durationHours
-                      ? `${product.durationHours}h`
+                      ? product.durationHours % 24 === 0
+                        ? `${product.durationHours / 24}d`
+                        : `${product.durationHours}h`
                       : "Open-ended"}
                   </p>
+                  <p className="text-slate-600 text-xs mt-0.5">affects premium only</p>
                 </div>
               </div>
 

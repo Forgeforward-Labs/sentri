@@ -126,6 +126,13 @@ export const POLICY_VAULT_ABI = [
     inputs: [],
     outputs: [{ type: "uint256" }],
   },
+  {
+    name: "utilizationMultiplierBps",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint256" }],
+  },
 ] as const;
 
 // ── Admin ABIs ───────────────────────────────────────────────────
@@ -207,6 +214,7 @@ export const INSURANCE_CORE_ADMIN_ABI = [
       { name: "pool",               type: "address" },
       { name: "liquidityThreshold", type: "uint256" },
       { name: "premiumRateBps",     type: "uint256" },
+      { name: "duration",           type: "uint256" },
       { name: "maxPerPosition",     type: "uint256" },
       { name: "poolLimit",          type: "uint256" },
       { name: "referenceTVL",       type: "uint256" },

@@ -101,12 +101,15 @@ contract AgentOrchestrator is Ownable {
     uint256 public constant SUBCOMMITTEE_SIZE   = 3;
 
     // ── Per-request state (arrays: one entry per batched position) ─
-    mapping(uint256 => uint256[]) public requestToPositions;  // positionId[]
-    mapping(uint256 => uint256[]) public requestToCoverages;  // coverageAmount[]
-    mapping(uint256 => uint8)     public requestToStep;       // 1=price, 2=LLM, 3=news
+    mapping(uint256 => uint256[]) public requestToPositions;   // positionId[]
+    mapping(uint256 => uint256[]) public requestToCoverages;   // coverageAmount[]
+    mapping(uint256 => uint8)     public requestToStep;        // 1=price, 2=LLM, 3=news
     mapping(uint256 => uint256)   public requestToThreshold;
     mapping(uint256 => bool)      public requestIsRug;
     mapping(uint256 => uint256)   public requestConfirmedPrice;
+    /// @dev Tracker-observed price at trigger time — used for depeg payout, not the
+    ///      agent-fetched price which may reflect partial recovery during pipeline delay.
+    mapping(uint256 => uint256)   public requestObservedPrice;
 
     // ── Events ───────────────────────────────────────────────────
     event BatchValidationStarted(uint256 indexed firstPositionId, uint256 batchSize, uint256 indexed requestId);
@@ -188,6 +191,7 @@ contract AgentOrchestrator is Ownable {
         );
 
         _storeRequest(requestId, positionIds, coverageAmounts, 1, threshold, false, observedPrice);
+        requestObservedPrice[requestId] = observedPrice;
         emit BatchValidationStarted(positionIds[0], positionIds.length, requestId);
     }
 
@@ -312,6 +316,10 @@ contract AgentOrchestrator is Ownable {
         );
 
         _storeRequest(newRequestId, posIds, coverages, isStep2 ? 2 : 3, threshold, isRug, confirmedValue);
+        // Carry the tracker-observed price forward so handleNewsResponse can use it for payout
+        if (!isRug && requestObservedPrice[prevRequestId] > 0) {
+            requestObservedPrice[newRequestId] = requestObservedPrice[prevRequestId];
+        }
         _clearRequest(prevRequestId);
     }
 
@@ -340,8 +348,18 @@ contract AgentOrchestrator is Ownable {
             return;
         }
 
-        emit StepAdvanced(posIds[0], 3, requestId);
-        _callLlm(requestId, posIds, coverages, threshold, isRug, confirmedValue, false);
+        // Rugs: on-chain liquidity data is objective — skip news verification and pay out.
+        // Depeg: price dips can be transient glitches, so require step 3 news confirmation.
+        if (isRug) {
+            for (uint256 i = 0; i < posIds.length; i++) {
+                IClaimProcessorOrchestrator(claimProcessor).processClaim(posIds[i], coverages[i]);
+                emit TriggerVerified(posIds[i], confirmedValue, coverages[i]);
+            }
+            _clearRequest(requestId);
+        } else {
+            emit StepAdvanced(posIds[0], 3, requestId);
+            _callLlm(requestId, posIds, coverages, threshold, isRug, confirmedValue, false);
+        }
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -357,6 +375,8 @@ contract AgentOrchestrator is Ownable {
         uint256[] memory posIds    = requestToPositions[requestId];
         uint256[] memory coverages = requestToCoverages[requestId];
         uint256   confirmedPrice   = requestConfirmedPrice[requestId];
+        bool      isRug            = requestIsRug[requestId];
+        uint256   threshold        = requestToThreshold[requestId];
 
         if (status != ResponseStatus.Success || responses.length == 0) {
             emit TriggerDenied(posIds[0], "Agent 3: news check failed", 3);
@@ -372,9 +392,24 @@ contract AgentOrchestrator is Ownable {
         }
 
         // All 3 agents confirmed — pay out every position in the batch
+        // For depeg: use tracker's observed price at trigger time (not agent-fetched price
+        // which may reflect partial recovery during the validation pipeline delay).
+        uint256 payoutPrice = (!isRug && requestObservedPrice[requestId] > 0)
+            ? requestObservedPrice[requestId]
+            : confirmedPrice;
+
         for (uint256 i = 0; i < posIds.length; i++) {
-            IClaimProcessorOrchestrator(claimProcessor).processClaim(posIds[i], coverages[i]);
-            emit TriggerVerified(posIds[i], confirmedPrice, coverages[i]);
+            uint256 payout;
+            if (isRug) {
+                // Rug: binary full payout — a rug is near-total loss
+                payout = coverages[i];
+            } else {
+                // Depeg: proportional to severity of the breach at trigger time
+                // payout = coverage × (threshold − payoutPrice) / threshold
+                payout = (coverages[i] * (threshold - payoutPrice)) / threshold;
+            }
+            IClaimProcessorOrchestrator(claimProcessor).processClaim(posIds[i], payout);
+            emit TriggerVerified(posIds[i], payoutPrice, payout);
         }
         _clearRequest(requestId);
     }
@@ -407,6 +442,7 @@ contract AgentOrchestrator is Ownable {
         delete requestToThreshold[requestId];
         delete requestIsRug[requestId];
         delete requestConfirmedPrice[requestId];
+        delete requestObservedPrice[requestId];
     }
 
     function _jsonApiCost() internal view returns (uint256) {

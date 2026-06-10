@@ -56,6 +56,9 @@ async function main() {
   await (await core.setClaimProcessor(await claimProcessor.getAddress())).wait();
   await (await core.setAgentOrchestrator(await orchestrator.getAddress())).wait();
   await (await claimProcessor.setAgentOrchestrator(await orchestrator.getAddress())).wait();
+  // Tracker address = deployer (same key used for both in this setup)
+  await (await core.setTracker(deployer.address)).wait();
+  console.log("Tracker set to:", deployer.address);
 
   // 6. Fund the orchestrator with STT so it can pay for agent calls
   const fundTx = await deployer.sendTransaction({
@@ -68,45 +71,79 @@ async function main() {
   // 7. NOTE: Set agent IDs after deployment once you have them from agents.somnia.network
   // await orchestrator.setAgentIds(<JSON_API_AGENT_ID>, <LLM_AGENT_ID>);
 
-  // 8. Create demo products (owner = deployer, tracker not set yet)
-  //    threshold: 0.97e18 for depeg (18-decimal WAD)
-  const DEPEG_THRESHOLD = ethers.parseEther("0.97");
+  // 8. Create demo products
+  //
+  // Depeg products use PROPORTIONAL payout: coverage × (threshold − price) / threshold
+  //   e.g. $5 000 coverage, price drops to $0.90:
+  //        payout = 5000 × (0.97 − 0.90) / 0.97 = $360.82
+  //   Premium rate is annual; pro-rated over the policy duration.
+  //   150 bps p.a. reflects low expected severity (proportional, not full).
+  //
+  // Rug product uses BINARY full payout — a rug is near-total loss.
+  //   800 bps p.a. reflects higher event probability + full payout exposure.
 
-  const depeg24hTx = await core.createDepegProduct(
-    "USDC Depeg 24h",
-    "0x0000000000000000000000000000000000000000", // pool address (demo)
-    DEPEG_THRESHOLD,
-    15,                          // 0.15% premium rate bps
-    86400,                       // 1 day in seconds
-    ethers.parseUnits("1000", 6), // max $1000 per position (USDC 6-decimal)
-    ethers.parseUnits("100000", 6), // pool limit $100k
-  );
-  await depeg24hTx.wait();
+  const DEPEG_THRESHOLD = ethers.parseEther("0.97"); // triggers below $0.97
 
-  const depeg7dTx = await core.createDepegProduct(
-    "USDC Depeg 7d",
+  // Product 1 — USDC Depeg 30-day
+  //   $5 000 max coverage, 400 bps p.a.
+  //   LP APY at 50% util / 1.5x: ~3%  |  at 90%+ / 3x: ~10%+
+  //   Premium examples: $1 000 → $3.29  |  $5 000 → $16.44
+  const depeg30dTx = await core.createDepegProduct(
+    "USDC Depeg 30d",
     "0x0000000000000000000000000000000000000000",
     DEPEG_THRESHOLD,
-    105,
-    86400 * 7,
-    ethers.parseUnits("5000", 6),
-    ethers.parseUnits("150000", 6),
+    400,                            // 4.0% p.a.
+    86400 * 30,                     // 30 days
+    ethers.parseUnits("5000", 6),   // max $5 000 per position
+    ethers.parseUnits("200000", 6), // pool limit $200 k
   );
-  await depeg7dTx.wait();
+  await depeg30dTx.wait();
 
+  // Product 2 — USDC Depeg 90-day
+  //   $10 000 max coverage, 350 bps p.a. (slight discount for longer lock-in)
+  //   Premium examples: $1 000 → $8.63  |  $10 000 → $86.30
+  const depeg90dTx = await core.createDepegProduct(
+    "USDC Depeg 90d",
+    "0x0000000000000000000000000000000000000000",
+    DEPEG_THRESHOLD,
+    350,                            // 3.5% p.a.
+    86400 * 90,                     // 90 days
+    ethers.parseUnits("10000", 6),  // max $10 000 per position
+    ethers.parseUnits("300000", 6), // pool limit $300 k
+  );
+  await depeg90dTx.wait();
+
+  // Product 3 — Rug Pull Protection 30-day (binary full payout)
+  //   Triggers when pool liquidity drops below 50 % of reference TVL.
+  //   $3 000 max coverage, 1200 bps p.a. (full payout on trigger warrants higher rate)
+  //   Premium examples: $1 000 → $9.86  |  $3 000 → $29.59
   const rugTx = await core.createRugProduct(
-    "TOKEN_X Rug Protection",
-    "0x0000000000000000000000000000000000000001", // token
-    "0x0000000000000000000000000000000000000002", // pool
-    5000, // 50% liquidity threshold in bps
-    500,  // 5% premium rate bps
-    ethers.parseUnits("3000", 6),
-    ethers.parseUnits("90000", 6),
-    ethers.parseUnits("500000", 6), // reference TVL
+    "Rug Pull Protection 30d",
+    "0x0000000000000000000000000000000000000001",
+    "0x0000000000000000000000000000000000000002",
+    5000,                           // trigger when ≤ 50 % liquidity remains
+    1200,                           // 12% p.a.
+    86400 * 30,                     // 30 days
+    ethers.parseUnits("3000", 6),   // max $3 000 per position
+    ethers.parseUnits("100000", 6), // pool limit $100 k
+    ethers.parseUnits("500000", 6), // reference TVL $500 k
   );
   await rugTx.wait();
 
-  console.log("Created 3 demo products");
+  // Product 4 — USDC Depeg 1-hour (demo only — expires quickly for testing expiry flow)
+  //   Premium hits the $1 floor regardless of amount (1h is tiny vs 365d).
+  const depeg1hTx = await core.createDepegProduct(
+    "USDC Depeg 1h (Demo)",
+    "0x0000000000000000000000000000000000000000",
+    DEPEG_THRESHOLD,
+    400,                            // 4.0% p.a. (same as 30d; premium will floor at $1)
+    3600,                           // 1 hour
+    ethers.parseUnits("5000", 6),   // max $5 000 per position
+    ethers.parseUnits("50000", 6),  // pool limit $50 k
+  );
+  await depeg1hTx.wait();
+
+  console.log("Created 4 demo products");
 
   // 9. Print final addresses for .env files
   const addresses = {
