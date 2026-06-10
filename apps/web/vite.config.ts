@@ -1,19 +1,19 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import { createRequire } from 'module'
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import { createRequire } from "module";
 
-const require = createRequire(import.meta.url)
+const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const tailwindcss = require('tailwindcss')
+const tailwindcss = require("tailwindcss");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const autoprefixer = require('autoprefixer')
+const autoprefixer = require("autoprefixer");
 
 export default defineConfig({
   plugins: [react()],
   css: {
     postcss: {
       plugins: [
-        tailwindcss({ config: './tailwind.config.js' }),
+        tailwindcss({ config: "./tailwind.config.js" }),
         autoprefixer(),
       ],
     },
@@ -21,4 +21,7 @@ export default defineConfig({
   server: {
     port: 3000,
   },
-})
+  preview: {
+    allowedHosts: "all",
+  },
+});
