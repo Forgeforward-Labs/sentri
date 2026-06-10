@@ -83,6 +83,15 @@ const INSURANCE_CORE_ABI = [
       { name: "triggerType", type: "uint8",   indexed: false },
     ],
   },
+  { name: "ProductPaused", type: "event",
+    inputs: [
+      { name: "id",     type: "uint256", indexed: true  },
+      { name: "reason", type: "string",  indexed: false },
+    ],
+  },
+  { name: "ProductUnpaused", type: "event",
+    inputs: [{ name: "id", type: "uint256", indexed: true }],
+  },
   { name: "PositionCreated", type: "event",
     inputs: [
       { name: "id",             type: "uint256", indexed: true  },
@@ -298,6 +307,19 @@ export class ContractService {
       this.getLogsChunked(addr, claimedEvent, fromBlock, toBlock),
     ]);
     return [...new Set([...expiredLogs, ...claimedLogs].map((l) => Number(l.args.id as bigint)))];
+  }
+
+  /** Returns product IDs that were paused or unpaused in [fromBlock, toBlock]. */
+  async getProductStatusChangesInRange(fromBlock: bigint, toBlock: bigint): Promise<number[]> {
+    if (!env.coreAddress) return [];
+    const addr = env.coreAddress as `0x${string}`;
+    const pausedEvent   = parseAbiItem("event ProductPaused(uint256 indexed id, string reason)") as AbiEvent;
+    const unpausedEvent = parseAbiItem("event ProductUnpaused(uint256 indexed id)") as AbiEvent;
+    const [pausedLogs, unpausedLogs] = await Promise.all([
+      this.getLogsChunked(addr, pausedEvent, fromBlock, toBlock),
+      this.getLogsChunked(addr, unpausedEvent, fromBlock, toBlock),
+    ]);
+    return [...new Set([...pausedLogs, ...unpausedLogs].map((l) => Number(l.args.id as bigint)))];
   }
 
   // ── Reads ───────────────────────────────────────────────────────

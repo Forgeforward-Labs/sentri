@@ -73,9 +73,10 @@ async function bootstrap() {
             const toBlock = await contractService.getBlockNumber();
             if (fromBlock > toBlock) return;
 
-            const [newProductIds, newPositionIds, changedPositionIds, chainStats] =
+            const [newProductIds, changedProductIds, newPositionIds, changedPositionIds, chainStats] =
               await Promise.all([
                 contractService.getProductIdsInRange(fromBlock, toBlock),
+                contractService.getProductStatusChangesInRange(fromBlock, toBlock),
                 contractService.getPositionIdsInRange(fromBlock, toBlock),
                 contractService.getPositionStatusChangesInRange(fromBlock, toBlock),
                 contractService.getPoolStats(),
@@ -84,17 +85,20 @@ async function bootstrap() {
             const allPositionIds = [
               ...new Set([...newPositionIds, ...changedPositionIds]),
             ];
+            const allProductIds = [
+              ...new Set([...newProductIds, ...changedProductIds]),
+            ];
 
-            const [newProducts, updatedPositions] = await Promise.all([
+            const [updatedProducts, updatedPositions] = await Promise.all([
               Promise.all(
-                newProductIds.map((id) => contractService.getProduct(id).catch(() => null)),
+                allProductIds.map((id) => contractService.getProduct(id).catch(() => null)),
               ),
               Promise.all(
                 allPositionIds.map((id) => contractService.getPosition(id).catch(() => null)),
               ),
             ]);
 
-            for (const p of newProducts) if (p) positionService.applyChainProduct(p);
+            for (const p of updatedProducts) if (p) positionService.applyChainProduct(p);
             for (const p of updatedPositions) if (p) positionService.applyChainPosition(p);
 
             // Re-read products affected by position changes so totalCommitted stays fresh
@@ -117,8 +121,8 @@ async function bootstrap() {
 
             await databaseService.setLastIndexedBlock(toBlock);
 
-            const summary = newProductIds.length > 0 || allPositionIds.length > 0
-              ? `${newProductIds.length} new products, ${allPositionIds.length} position updates`
+            const summary = allProductIds.length > 0 || allPositionIds.length > 0
+              ? `${newProductIds.length} new products, ${changedProductIds.length} product status changes, ${allPositionIds.length} position updates`
               : "no new events";
             console.info(`[tracker] polled blocks ${fromBlock}–${toBlock}: ${summary}`);
           } catch (err) {
