@@ -11,7 +11,7 @@ export const TRACKER_URL           = import.meta.env.VITE_TRACKER_URL           
 // Deployer / owner of all contracts
 export const OWNER_ADDRESS         = "0xD7Fd52209711c94A3Fcc4f3aeB3668d2Df829254" as `0x${string}`;
 
-export const USDSO_DECIMALS = 13; // USDso: 18 decimals, 1 USDso = $100 000 → $1 = 1e13 raw
+export const USDSO_DECIMALS = 13; // use 13 of token's 18 decimals → 1 USDso = $100 000
 export const WAD             = BigInt(1e18);
 
 // ── ABIs ────────────────────────────────────────────────────────
