@@ -7,6 +7,7 @@ import {
   useReadContract,
 } from "wagmi";
 import { parseUnits, formatUnits } from "viem";
+import { CheckCircle2, Info } from "lucide-react";
 import StatusBadge from "../components/StatusBadge";
 import { formatUsd, cn } from "../lib/utils";
 import {
@@ -55,7 +56,8 @@ function BuyCoverageButton({
 
   if (isSuccess) {
     return (
-      <div className="w-full py-3 rounded-xl font-semibold text-sm text-center bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+      <div className="w-full py-3 rounded-xl font-semibold text-sm text-center bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 flex items-center justify-center gap-2">
+        <CheckCircle2 className="w-4 h-4" />
         Coverage purchased!
       </div>
     );
@@ -73,12 +75,15 @@ function BuyCoverageButton({
       onClick={handleClick}
       disabled={disabled || loading || parsedAmount === 0}
       className={cn(
-        "w-full py-3 rounded-xl font-semibold text-sm transition-colors mt-1",
+        "w-full py-3 rounded-xl font-semibold text-sm transition-all mt-1 flex items-center justify-center gap-2",
         !disabled && parsedAmount > 0 && !loading
-          ? "bg-brand-500 hover:bg-brand-400 text-black"
+          ? "bg-brand-500 hover:bg-brand-400 text-black glow-brand hover:scale-[1.01] active:scale-[0.99]"
           : "bg-slate-800 text-slate-500 cursor-not-allowed",
       )}
     >
+      {loading && (
+        <span className="w-3.5 h-3.5 border-2 border-current/30 border-t-current rounded-full animate-spin" />
+      )}
       {label}
     </button>
   );
@@ -110,8 +115,6 @@ function PremiumCalculator({ product }: { product: Product }) {
   const multiplier = multiplierBpsRaw !== undefined ? Number(multiplierBpsRaw) / 10000 : 1;
 
   const parsedAmount = parseFloat(amount) || 0;
-
-  // Mirror InsuranceCore.calculatePremium: annual rate × duration × utilization multiplier
   const durationYears = (product.durationHours ?? 0) / (365 * 24);
   const rawPremium = (product.premiumRateBps * parsedAmount * durationYears * multiplier) / 10000;
   const premium = Math.max(rawPremium, parsedAmount > 0 ? 1 : 0);
@@ -121,7 +124,6 @@ function PremiumCalculator({ product }: { product: Product }) {
     ? (product.triggerParams as DepegParams).threshold
     : null;
 
-  // Three payout scenarios at increasing depeg severity
   const depegScenarios = threshold
     ? [
         { price: +(threshold - 0.02).toFixed(2), label: "Minor" },
@@ -135,18 +137,20 @@ function PremiumCalculator({ product }: { product: Product }) {
       }))
     : [];
 
-  const exceedsVault =
-    vaultAvailableUsd !== null && parsedAmount > vaultAvailableUsd;
+  const exceedsVault = vaultAvailableUsd !== null && parsedAmount > vaultAvailableUsd;
   const exceedsMax = parsedAmount > product.maxPerPositionUsd;
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 pt-2 border-t border-slate-800">
+      <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+        Calculate Premium
+      </p>
       <div>
         <label className="text-xs text-slate-500 mb-1.5 block">
-          Coverage Amount (USD)
+          Coverage Amount (USDC)
         </label>
         <div className="relative">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm select-none">
             $
           </span>
           <input
@@ -157,48 +161,51 @@ function PremiumCalculator({ product }: { product: Product }) {
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             placeholder="Enter amount"
-            className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-7 pr-4 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-brand-500 transition-colors"
+            className="input-base pl-7 pr-4 py-2.5"
           />
         </div>
         {exceedsMax && (
-          <p className="text-red-400 text-xs mt-1">
+          <p className="text-red-400 text-xs mt-1 flex items-center gap-1">
+            <Info className="w-3 h-3" />
             Max per position: {formatUsd(product.maxPerPositionUsd)}
           </p>
         )}
         {!exceedsMax && exceedsVault && (
-          <p className="text-amber-400 text-xs mt-1">
-            Vault only has {formatUsd(vaultAvailableUsd!)} available — deposit
-            more via Earn
+          <p className="text-amber-400 text-xs mt-1 flex items-center gap-1">
+            <Info className="w-3 h-3" />
+            Only {formatUsd(vaultAvailableUsd!)} available in vault
           </p>
         )}
       </div>
 
       {parsedAmount > 0 && (
-        <div className="bg-slate-800/60 rounded-lg p-3 space-y-2.5 text-sm">
-          <div className="flex justify-between">
-            <span className="text-slate-500">Premium</span>
-            <span className="text-white font-medium">
+        <div className="bg-slate-800/50 rounded-xl p-3.5 space-y-3 text-sm border border-slate-700/40">
+          <div className="flex justify-between items-center">
+            <span className="text-slate-400">Premium</span>
+            <span className="text-white font-semibold">
               ${premium.toFixed(2)} USDC
               {multiplier > 1 && (
-                <span className="text-amber-400 text-xs ml-1">({multiplier}× utilization)</span>
+                <span className="text-amber-400 text-xs ml-1.5 font-normal">
+                  ({multiplier}× util)
+                </span>
               )}
             </span>
           </div>
 
-          <div className="border-t border-slate-700/60 pt-2">
+          <div className="border-t border-slate-700/50 pt-2.5">
             {isDepeg ? (
               <>
-                <p className="text-slate-500 text-xs mb-2">
-                  Partial payout — proportional to depeg depth, not full-loss reimbursement
+                <p className="text-slate-500 text-xs mb-2 leading-relaxed">
+                  Proportional payout — scales with depeg depth
                 </p>
                 {depegScenarios.map(({ price, label, payout, pct }) => (
-                  <div key={price} className="flex justify-between text-xs py-0.5">
+                  <div key={price} className="flex justify-between text-xs py-1">
                     <span className="text-slate-400">
                       {label} — USDC at ${price.toFixed(2)}
                     </span>
-                    <span className="text-amber-400 font-medium">
+                    <span className="text-amber-400 font-medium tabular-nums">
                       ${payout.toFixed(2)}{" "}
-                      <span className="text-slate-500">({pct.toFixed(1)}%)</span>
+                      <span className="text-slate-600">({pct.toFixed(1)}%)</span>
                     </span>
                   </div>
                 ))}
@@ -206,13 +213,13 @@ function PremiumCalculator({ product }: { product: Product }) {
             ) : (
               <>
                 <p className="text-slate-500 text-xs mb-2">
-                  Full payout — entire coverage amount paid out on trigger
+                  Full payout on rug trigger (2-agent consensus)
                 </p>
                 <div className="flex justify-between text-xs">
                   <span className="text-slate-400">Pool liquidity drops ≤50%</span>
-                  <span className="text-emerald-400 font-medium">
+                  <span className="text-emerald-400 font-medium tabular-nums">
                     ${parsedAmount.toFixed(2)}{" "}
-                    <span className="text-slate-500">(100%)</span>
+                    <span className="text-slate-600">(100%)</span>
                   </span>
                 </div>
               </>
@@ -245,25 +252,29 @@ export default function CoverPage() {
   const filteredProducts = (products ?? []).filter((p) => p.triggerType === activeTab);
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-12 min-h-screen">
-      <div className="mb-10">
-        <h1 className="text-4xl font-black text-white mb-3">Get Coverage</h1>
-        <p className="text-slate-400 text-lg max-w-xl">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-12 min-h-screen">
+      <div className="mb-8 sm:mb-10">
+        <p className="text-brand-400 text-sm font-medium uppercase tracking-wider mb-2">
+          Coverage
+        </p>
+        <h1 className="text-3xl sm:text-4xl font-black text-white mb-3">Get Coverage</h1>
+        <p className="text-slate-400 text-base sm:text-lg max-w-xl">
           Parametric protection against depeg events and rug pulls. Pay a
-          premium, get covered — instantly.
+          premium, get covered — no underwriting, no delays.
         </p>
       </div>
 
-      <div className="flex gap-1 p-1 bg-slate-900 border border-slate-800 rounded-xl w-fit mb-8">
+      {/* Tab bar — full width on mobile */}
+      <div className="flex gap-1 p-1 bg-slate-900 border border-slate-800 rounded-xl mb-6 sm:mb-8">
         {(["DEPEG", "RUG"] as TabType[]).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
             className={cn(
-              "px-5 py-2 rounded-lg text-sm font-medium transition-all",
+              "flex-1 px-3 sm:px-6 py-2.5 rounded-lg text-sm font-medium transition-all",
               activeTab === tab
-                ? "bg-brand-500 text-black shadow"
-                : "text-slate-400 hover:text-slate-200",
+                ? "bg-brand-500 text-black shadow-lg"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60",
             )}
           >
             {tab === "DEPEG" ? "Depeg Insurance" : "Rug Pull Protection"}
@@ -271,19 +282,32 @@ export default function CoverPage() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5 sm:gap-6">
         {filteredProducts.map((product) => {
-          const utilPct = Math.round(
-            (product.totalCommittedUsd / product.poolLimitUsd) * 100,
-          );
+          const utilPct = product.poolLimitUsd > 0
+            ? Math.round((product.totalCommittedUsd / product.poolLimitUsd) * 100)
+            : 0;
+          const utilColor =
+            utilPct < 50 ? "bg-emerald-500" :
+            utilPct < 70 ? "bg-amber-500" :
+            utilPct < 90 ? "bg-orange-500" : "bg-red-500";
+          const utilTextColor =
+            utilPct < 50 ? "text-emerald-400" :
+            utilPct < 70 ? "text-amber-400" :
+            utilPct < 90 ? "text-orange-400" : "text-red-400";
+
           return (
             <div
               key={product.id}
-              className="bg-slate-900 border border-slate-800 rounded-xl p-6 flex flex-col gap-5"
+              className="bg-slate-900 border border-slate-800 rounded-xl p-6 flex flex-col gap-5 card-hover"
             >
+              {/* Header */}
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <p className="text-xs font-medium text-brand-400 uppercase tracking-wider mb-1">
+                  <p className={cn(
+                    "text-[10px] font-semibold uppercase tracking-widest mb-1.5",
+                    product.triggerType === "DEPEG" ? "text-brand-400" : "text-amber-400"
+                  )}>
                     {product.triggerType === "DEPEG"
                       ? "Depeg Insurance"
                       : "Rug Pull Protection"}
@@ -295,21 +319,22 @@ export default function CoverPage() {
                 <StatusBadge status={product.healthStatus} />
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              {/* Stats grid */}
+              <div className="grid grid-cols-3 gap-2.5">
                 <div className="bg-slate-800/60 rounded-lg p-3">
-                  <p className="text-slate-500 text-xs mb-1">Max Coverage</p>
+                  <p className="text-slate-500 text-[10px] mb-1 uppercase tracking-wider">Max Cover</p>
                   <p className="text-white font-semibold text-sm">
                     {formatUsd(product.maxPerPositionUsd)}
                   </p>
                 </div>
                 <div className="bg-slate-800/60 rounded-lg p-3">
-                  <p className="text-slate-500 text-xs mb-1">Annual Rate</p>
+                  <p className="text-slate-500 text-[10px] mb-1 uppercase tracking-wider">Annual Rate</p>
                   <p className="text-white font-semibold text-sm">
-                    {(product.premiumRateBps / 100).toFixed(2)}% p.a.
+                    {(product.premiumRateBps / 100).toFixed(2)}%
                   </p>
                 </div>
                 <div className="bg-slate-800/60 rounded-lg p-3">
-                  <p className="text-slate-500 text-xs mb-1">Duration</p>
+                  <p className="text-slate-500 text-[10px] mb-1 uppercase tracking-wider">Duration</p>
                   <p className="text-white font-semibold text-sm">
                     {product.durationHours
                       ? product.durationHours % 24 === 0
@@ -317,31 +342,22 @@ export default function CoverPage() {
                         : `${product.durationHours}h`
                       : "Open-ended"}
                   </p>
-                  <p className="text-slate-600 text-xs mt-0.5">affects premium only</p>
                 </div>
               </div>
 
+              {/* Pool utilization */}
               <div>
-                <div className="flex justify-between text-xs text-slate-500 mb-1.5">
-                  <span>Pool Utilization</span>
-                  <span>{utilPct}%</span>
+                <div className="flex justify-between text-xs mb-1.5">
+                  <span className="text-slate-500">Pool Utilization</span>
+                  <span className={utilTextColor}>{utilPct}%</span>
                 </div>
                 <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
                   <div
-                    className={cn(
-                      "h-full rounded-full transition-all",
-                      utilPct < 50
-                        ? "bg-emerald-500"
-                        : utilPct < 70
-                          ? "bg-amber-500"
-                          : utilPct < 90
-                            ? "bg-orange-500"
-                            : "bg-red-500",
-                    )}
+                    className={cn("h-full rounded-full transition-all", utilColor)}
                     style={{ width: `${utilPct}%` }}
                   />
                 </div>
-                <p className="text-slate-600 text-xs mt-1">
+                <p className="text-slate-600 text-xs mt-1.5">
                   {formatUsd(product.totalCommittedUsd)} committed of{" "}
                   {formatUsd(product.poolLimitUsd)} limit
                 </p>
@@ -353,14 +369,18 @@ export default function CoverPage() {
         })}
 
         {isLoading && filteredProducts.length === 0 && (
-          <div className="col-span-2 text-center py-16 text-slate-500 text-sm">
-            Loading products…
-          </div>
+          <>
+            {[1, 2].map((i) => (
+              <div key={i} className="bg-slate-900 border border-slate-800 rounded-xl p-6 h-72 animate-pulse" />
+            ))}
+          </>
         )}
         {!isLoading && filteredProducts.length === 0 && (
-          <div className="col-span-2 text-center py-16 text-slate-500">
-            No {activeTab === "DEPEG" ? "depeg" : "rug pull"} products
-            available.
+          <div className="col-span-2 text-center py-16 sm:py-20 text-slate-500 border border-slate-800/50 rounded-xl bg-slate-900/30">
+            <p className="text-base sm:text-lg mb-1">No products available</p>
+            <p className="text-sm text-slate-600">
+              No {activeTab === "DEPEG" ? "depeg" : "rug pull"} products deployed yet.
+            </p>
           </div>
         )}
       </div>

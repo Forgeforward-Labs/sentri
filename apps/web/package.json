@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@rainbow-me/rainbowkit": "^2.2.11",
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.17.10",
     "@sentri/config": "workspace:*",
