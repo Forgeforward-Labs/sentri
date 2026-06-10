@@ -2,12 +2,16 @@ import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import { DatabaseService } from "../services/databaseService.js";
 import { PositionService } from "../services/positionService.js";
+import type { ContractService } from "../services/contractService.js";
 
 export function createDashboardApi(
   positionService: PositionService,
   databaseService: DatabaseService,
+  contractService?: ContractService,
 ) {
   const app = express();
+
+  app.use(express.json());
 
   app.use((_req: Request, res: Response, next: NextFunction) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -89,6 +93,38 @@ export function createDashboardApi(
       return;
     }
     response.json(participant);
+  });
+
+  // ── Admin / Demo triggers ───────────────────────────────────────
+
+  app.post("/admin/trigger-depeg", async (request, response) => {
+    if (!contractService) { response.status(503).json({ error: "contractService not available" }); return; }
+    const { productId, observedPrice } = request.body as { productId: number; observedPrice: number };
+    const positionIds = positionService.getPositions()
+      .filter((p) => p.productId === productId && p.status === "ACTIVE")
+      .map((p) => p.id);
+    if (positionIds.length === 0) { response.status(400).json({ error: "no active positions for product" }); return; }
+    try {
+      const tx = await contractService.initiateDepegClaimBatch(positionIds, observedPrice);
+      response.json({ ok: true, tx, positionIds });
+    } catch (err) {
+      response.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.post("/admin/trigger-rug", async (request, response) => {
+    if (!contractService) { response.status(503).json({ error: "contractService not available" }); return; }
+    const { productId, liquidityPctBps } = request.body as { productId: number; liquidityPctBps: number };
+    const positionIds = positionService.getPositions()
+      .filter((p) => p.productId === productId && p.status === "ACTIVE")
+      .map((p) => p.id);
+    if (positionIds.length === 0) { response.status(400).json({ error: "no active positions for product" }); return; }
+    try {
+      const tx = await contractService.initiateRugClaimBatch(positionIds, liquidityPctBps);
+      response.json({ ok: true, tx, positionIds });
+    } catch (err) {
+      response.status(500).json({ error: String(err) });
+    }
   });
 
   return app;

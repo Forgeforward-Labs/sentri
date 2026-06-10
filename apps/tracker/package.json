@@ -10,7 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "db:reset": "tsx scripts/reset-db.ts && drizzle-kit push"
   },
   "dependencies": {
     "@sentri/config": "workspace:*",

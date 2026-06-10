@@ -148,6 +148,7 @@ function CreateRugSection() {
   const [pool, setPool] = useState('')
   const [liquidityThreshold, setLiquidityThreshold] = useState('20')
   const [premiumBps, setPremiumBps] = useState('200')
+  const [durationHours, setDurationHours] = useState('720')
   const [maxPosUsd, setMaxPosUsd] = useState('5000')
   const [poolLimitUsd, setPoolLimitUsd] = useState('50000')
   const [referenceTvlUsd, setReferenceTvlUsd] = useState('1000000')
@@ -181,6 +182,7 @@ function CreateRugSection() {
           pool as `0x${string}`,
           BigInt(Math.round(parseFloat(liquidityThreshold) * 100)),
           BigInt(premiumBps),
+          BigInt(Math.round(parseFloat(durationHours) * 3600)),
           parseUnits(maxPosUsd, USDC_DECIMALS),
           parseUnits(poolLimitUsd, USDC_DECIMALS),
           parseUnits(referenceTvlUsd, USDC_DECIMALS),
@@ -204,7 +206,8 @@ function CreateRugSection() {
           <Field label="Pool Address" value={pool} onChange={setPool} placeholder="0x… (liquidity pool)" />
         </div>
         <Field label="Liquidity Threshold (%)" value={liquidityThreshold} onChange={setLiquidityThreshold} type="number" placeholder="20" />
-        <Field label="Premium Rate (bps)" value={premiumBps} onChange={setPremiumBps} type="number" placeholder="200" />
+        <Field label="Annual Premium Rate (bps)" value={premiumBps} onChange={setPremiumBps} type="number" placeholder="200" />
+        <Field label="Duration (hours)" value={durationHours} onChange={setDurationHours} type="number" placeholder="720" />
         <Field label="Max Per Position (USDC)" value={maxPosUsd} onChange={setMaxPosUsd} type="number" placeholder="5000" />
         <Field label="Pool Limit (USDC)" value={poolLimitUsd} onChange={setPoolLimitUsd} type="number" placeholder="50000" />
         <div className="col-span-2">

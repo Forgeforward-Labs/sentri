@@ -15,7 +15,7 @@ const databaseService = new DatabaseService();
 
 // ── HTTP + WebSocket server ──────────────────────────────────────
 
-const app = createDashboardApi(positionService, databaseService);
+const app = createDashboardApi(positionService, databaseService, contractService);
 const server = createServer(app);
 const websocketServer = new WebSocketServer({ server, path: "/" });
 
