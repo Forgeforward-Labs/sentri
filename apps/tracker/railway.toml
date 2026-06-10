@@ -1,0 +1,5 @@
+[build]
+buildCommand = "turbo build --filter=@sentri/tracker"
+
+[deploy]
+startCommand = "node apps/tracker/dist/index.js"
