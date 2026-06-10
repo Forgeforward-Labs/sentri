@@ -1,7 +1,7 @@
 import { useParams, Link } from 'react-router-dom'
 import type { AgentLogEntry } from '@sentri/shared-types'
 import { usePosition, useProducts, usePositionLogs } from '../lib/useTrackerData'
-import { CheckCircle, Clock, Globe, Brain, Search } from 'lucide-react'
+import { CheckCircle, XCircle, Minus, Clock, Globe, Brain, Search } from 'lucide-react'
 import StatusBadge from '../components/StatusBadge'
 import AgentLogTimeline from '../components/AgentLogTimeline'
 import { formatUsd, formatDate, timeUntil, cn } from '../lib/utils'
@@ -71,7 +71,28 @@ export default function PositionDetailPage() {
     )
   }
 
-  const completedAgents = new Set(logs.map((l) => l.agent))
+  const isRug = product?.triggerType === 'RUG'
+
+  // Derive per-agent outcome from log entries.
+  // "Step N advanced" is logged on the NEXT agent's key, so AGENT_1 passing appears as AGENT_2's log.
+  const agentPassed: Record<string, boolean> = {
+    AGENT_1: logs.some((l) => l.agent === 'AGENT_2' && l.action.includes('Step 2')),
+    AGENT_2: logs.some((l) => l.agent === 'AGENT_3' && l.action.includes('Step 3')) ||
+             logs.some((l) => l.agent === 'AGENT_2' && l.action.includes('Trigger verified')),
+    AGENT_3: logs.some((l) => l.agent === 'AGENT_3' && l.action.includes('Trigger verified')),
+  }
+  // For rugs AGENT_2 payout is verified directly — no step 3 log exists
+  if (isRug) {
+    agentPassed.AGENT_2 = logs.some((l) => l.agent === 'AGENT_2' && l.action.includes('Trigger verified')) ||
+                          logs.some((l) => l.agent === 'AGENT_3' && l.action.includes('Trigger verified')) ||
+                          agentPassed.AGENT_2
+  }
+
+  const agentDenied: Record<string, boolean> = {
+    AGENT_1: logs.some((l) => l.agent === 'AGENT_1' && l.action.toLowerCase().includes('denied')),
+    AGENT_2: logs.some((l) => l.agent === 'AGENT_2' && l.action.toLowerCase().includes('denied')),
+    AGENT_3: logs.some((l) => l.agent === 'AGENT_3' && l.action.toLowerCase().includes('denied')),
+  }
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-12 min-h-screen">
@@ -98,39 +119,54 @@ export default function PositionDetailPage() {
         <h2 className="text-white font-semibold mb-6">Agent Validation Chain</h2>
         <div className="flex items-center gap-0">
           {agentSteps.map((step, index) => {
-            const completed = completedAgents.has(step.agentKey)
+            const passed  = agentPassed[step.agentKey]
+            const denied  = agentDenied[step.agentKey]
+            const skipped = isRug && step.agentKey === 'AGENT_3'
             const Icon = step.icon
+
+            const circleClass = cn(
+              'w-12 h-12 rounded-full flex items-center justify-center border-2 transition-all',
+              passed  ? 'bg-brand-500/20 border-brand-400 text-brand-400' :
+              denied  ? 'bg-red-500/20 border-red-400 text-red-400' :
+              skipped ? 'bg-slate-800/40 border-slate-800 text-slate-700' :
+                        'bg-slate-800 border-slate-700 text-slate-600'
+            )
+            const labelClass = cn(
+              'text-xs font-semibold mt-2',
+              passed  ? 'text-brand-400' :
+              denied  ? 'text-red-400' :
+              skipped ? 'text-slate-700' :
+                        'text-slate-600'
+            )
+
+            // Connector after this step: green if both sides passed, red if this side denied, else grey
+            const nextStep = agentSteps[index + 1]
+            const connectorClass = cn(
+              'flex-1 h-0.5 max-w-[60px] mx-2 -mt-8',
+              denied                                       ? 'bg-red-500/50' :
+              passed && nextStep && agentPassed[nextStep.agentKey] ? 'bg-brand-400' :
+                                                            'bg-slate-800'
+            )
+
             return (
               <div key={step.agentKey} className="flex items-center flex-1">
                 <div className="flex flex-col items-center flex-1">
-                  <div
-                    className={cn(
-                      'w-12 h-12 rounded-full flex items-center justify-center border-2 transition-all',
-                      completed
-                        ? 'bg-brand-500/20 border-brand-400 text-brand-400'
-                        : 'bg-slate-800 border-slate-700 text-slate-600'
-                    )}
-                  >
-                    {completed ? (
-                      <CheckCircle className="w-5 h-5" />
-                    ) : (
-                      <Icon className="w-5 h-5" />
-                    )}
+                  <div className={circleClass}>
+                    {passed  ? <CheckCircle className="w-5 h-5" /> :
+                     denied  ? <XCircle className="w-5 h-5" /> :
+                     skipped ? <Minus className="w-5 h-5" /> :
+                               <Icon className="w-5 h-5" />}
                   </div>
-                  <p className={cn('text-xs font-semibold mt-2', completed ? 'text-brand-400' : 'text-slate-600')}>
-                    {step.label}
+                  <p className={labelClass}>{step.label}</p>
+                  <p className={cn(
+                    'text-xs text-center max-w-[100px]',
+                    denied ? 'text-red-500/70' : skipped ? 'text-slate-700' : 'text-slate-600'
+                  )}>
+                    {denied ? 'Denied' : skipped ? 'N/A (rug)' : step.sublabel}
                   </p>
-                  <p className="text-slate-600 text-xs text-center max-w-[100px]">{step.sublabel}</p>
                 </div>
                 {index < agentSteps.length - 1 && (
-                  <div
-                    className={cn(
-                      'flex-1 h-0.5 max-w-[60px] mx-2 -mt-8',
-                      completed && completedAgents.has(agentSteps[index + 1].agentKey)
-                        ? 'bg-brand-400'
-                        : 'bg-slate-800'
-                    )}
-                  />
+                  <div className={connectorClass} />
                 )}
               </div>
             )
@@ -206,7 +242,7 @@ export default function PositionDetailPage() {
                 {formatUsd(position.claimedPayoutUsd)}
               </p>
               <p className="text-slate-500 text-xs">
-                Executed automatically on-chain after 3-agent consensus.
+                Executed automatically on-chain after {isRug ? '2-agent' : '3-agent'} consensus.
               </p>
               {position.claimedPrice != null && (
                 <div className="mt-4 pt-4 border-t border-emerald-500/20 text-sm">
