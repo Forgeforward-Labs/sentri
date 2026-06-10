@@ -2,4 +2,4 @@
 buildCommand = "turbo build --filter=@sentri/tracker"
 
 [deploy]
-startCommand = "node apps/tracker/dist/index.js"
+startCommand = "yarn workspace @sentri/tracker db:push && yarn workspace @sentri/tracker start"
