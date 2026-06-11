@@ -1,4 +1,5 @@
 import "@nomicfoundation/hardhat-ethers";
+import "@nomicfoundation/hardhat-verify";
 import dotenv from "dotenv";
 import type { HardhatUserConfig } from "hardhat/config";
 
@@ -22,10 +23,27 @@ const config: HardhatUserConfig = {
   },
   networks: {
     somniaTestnet: {
-      url: process.env.SOMNIA_TESTNET_RPC_URL ?? "https://dream-rpc.somnia.network",
+      url:
+        process.env.SOMNIA_TESTNET_RPC_URL ??
+        "https://dream-rpc.somnia.network",
       chainId: 50312,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
     },
+  },
+  etherscan: {
+    apiKey: {
+      somniaTestnet: "JGC4TBB5G6XTD5P24EE8ZPT3JY7Y8519Z2", // Blockscout doesn't require a real key
+    },
+    customChains: [
+      {
+        network: "somniaTestnet",
+        chainId: 50312,
+        urls: {
+          apiURL: "https://shannon-explorer.somnia.network/api",
+          browserURL: "https://shannon-explorer.somnia.network",
+        },
+      },
+    ],
   },
 };
 

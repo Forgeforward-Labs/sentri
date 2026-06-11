@@ -30,7 +30,7 @@ User buys coverage
    ClaimProcessor executes payout from PolicyVault → holder's wallet
 ```
 
-**Depeg coverage** — proportional payout. If USDC trades at $0.90 against a $0.97 threshold, a $5,000 position pays out `5000 × (0.97 − 0.90) / 0.97 ≈ $361`. Requires all 3 agent steps.
+**Depeg coverage** — proportional payout. If a stablecoin trades at $0.90 against a $0.97 threshold, a $5,000 position pays out `5000 × (0.97 − 0.90) / 0.97 ≈ $361`. Requires all 3 agent steps.
 
 **Rug pull coverage** — binary full payout. Triggered when pool liquidity drops below the product threshold. Requires 2 agent steps (price is objective — news step is skipped).
 
@@ -52,15 +52,15 @@ A denial at any step (agent failure, timeout, or `NO` answer) cancels the batch 
 
 ## Smart Contracts
 
-All contracts are deployed on **Somnia Testnet (chain ID 50312)**.
+All contracts are deployed and verified on **Somnia Testnet (chain ID 50312)**.
 
 | Contract | Address | Role |
 |----------|---------|------|
-| `PolicyVault` | [`0xc08e3108c9Af78D17775dEA61398DE95d2b578B0`](https://shannon-explorer.somnia.network/address/0xc08e3108c9Af78D17775dEA61398DE95d2b578B0) | USDC liquidity pool; mints `sLP` shares to LPs |
-| `InsuranceCore` | [`0xCF0dBb1783b2B7584AaC9C6E743E8D5DfE556592`](https://shannon-explorer.somnia.network/address/0xCF0dBb1783b2B7584AaC9C6E743E8D5DfE556592) | Products, positions, trigger initiation |
-| `ClaimProcessor` | [`0x2C2c409770Af2C0125142CFBb40027C1f77341f7`](https://shannon-explorer.somnia.network/address/0x2C2c409770Af2C0125142CFBb40027C1f77341f7) | Receives agent consensus; executes payouts |
-| `AgentOrchestrator` | [`0x48faeBA1046d91599bE693513b969F52a5d557c4`](https://shannon-explorer.somnia.network/address/0x48faeBA1046d91599bE693513b969F52a5d557c4) | Routes requests to Somnia Agent Platform |
-| `USDC` (testnet) | `0x9c32F3827A1a99f0cf9B213de8b53eC3d57bb171` | 6-decimal test USDC |
+| `PolicyVault` | [`0x4f6D51B207F1eA053bF224b72316c4DAF170A40A`](https://shannon-explorer.somnia.network/address/0x4f6D51B207F1eA053bF224b72316c4DAF170A40A#code) | USDso liquidity pool; mints `sLP` shares to LPs |
+| `InsuranceCore` | [`0x5603426365FC334E3eaF8c31c59BDA8ED223A127`](https://shannon-explorer.somnia.network/address/0x5603426365FC334E3eaF8c31c59BDA8ED223A127#code) | Products, positions, trigger initiation |
+| `ClaimProcessor` | [`0x81066a0d13e6C359360954516Ad63F6B1aFd638E`](https://shannon-explorer.somnia.network/address/0x81066a0d13e6C359360954516Ad63F6B1aFd638E#code) | Receives agent consensus; executes payouts |
+| `AgentOrchestrator` | [`0xA50F7Fd25DdC86546202f7501873EB7E66175BD3`](https://shannon-explorer.somnia.network/address/0xA50F7Fd25DdC86546202f7501873EB7E66175BD3#code) | Routes requests to Somnia Agent Platform |
+| `USDso` (testnet) | [`0x9c32F3827A1a99f0cf9B213de8b53eC3d57bb171`](https://shannon-explorer.somnia.network/address/0x9c32F3827A1a99f0cf9B213de8b53eC3d57bb171) | 18-decimal test token (1 USDso = $100,000) |
 
 **Deployer / owner:** `0xD7Fd52209711c94A3Fcc4f3aeB3668d2Df829254`
 
@@ -88,7 +88,7 @@ React SPA built with Vite, Wagmi v2, and RainbowKit. Pages:
 
 - **Home** — protocol overview, live TVL / position counts, 3D agent network scene
 - **Cover** — browse depeg / rug products, set coverage amount, buy on-chain
-- **Earn** — deposit USDC as LP, view utilization tier, withdraw sLP shares
+- **Earn** — deposit USDso as LP, view utilization tier, withdraw sLP shares
 - **Dashboard** — live position list with agent log timeline per position
 - **Analytics** — protocol-wide stats (TVL, paid claims, active products)
 
@@ -97,7 +97,7 @@ Node.js service that watches the chain and triggers agent validation batches:
 
 | Monitor | Interval | What it does |
 |---------|----------|-------------|
-| `depegMonitor` | 60 s | Polls USDC price; calls `startDepegValidationBatch` when price < 0.97 |
+| `depegMonitor` | 60 s | Polls stablecoin price; calls `startDepegValidationBatch` when price < 0.97 |
 | `rugMonitor` | 90 s | Polls pool liquidity; calls `startRugValidationBatch` when below threshold |
 | `expiryMonitor` | 5 min | Cancels expired positions on-chain |
 | `pendingMonitor` | 2 min | Retries stuck pending positions |
@@ -133,26 +133,26 @@ yarn install
 **`packages/contracts/.env`**
 ```
 PRIVATE_KEY=0x...
-RPC_URL=https://dream-rpc.somnia.network
-USDC_ADDRESS=0x9c32F3827A1a99f0cf9B213de8b53eC3d57bb171
+SOMNIA_TESTNET_RPC_URL=https://api.infra.testnet.somnia.network
+USDSO_ADDRESS=0x9c32F3827A1a99f0cf9B213de8b53eC3d57bb171
 ```
 
 **`apps/tracker/.env`**
 ```
 TRACKER_PRIVATE_KEY=0x...
-RPC_URL=https://dream-rpc.somnia.network
-CORE_ADDRESS=0xCF0dBb1783b2B7584AaC9C6E743E8D5DfE556592
-VAULT_ADDRESS=0xc08e3108c9Af78D17775dEA61398DE95d2b578B0
-AGENT_ORCHESTRATOR_ADDRESS=0x48faeBA1046d91599bE693513b969F52a5d557c4
+SOMNIA_HTTP_RPC_URL=https://api.infra.testnet.somnia.network
+CORE_ADDRESS=0x5603426365FC334E3eaF8c31c59BDA8ED223A127
+VAULT_ADDRESS=0x4f6D51B207F1eA053bF224b72316c4DAF170A40A
+AGENT_ORCHESTRATOR_ADDRESS=0xA50F7Fd25DdC86546202f7501873EB7E66175BD3
 PORT=4000
 ```
 
 **`apps/web/.env.local`**
 ```
-VITE_CORE_ADDRESS=0xCF0dBb1783b2B7584AaC9C6E743E8D5DfE556592
-VITE_VAULT_ADDRESS=0xc08e3108c9Af78D17775dEA61398DE95d2b578B0
-VITE_USDC_ADDRESS=0x9c32F3827A1a99f0cf9B213de8b53eC3d57bb171
-VITE_ORCHESTRATOR_ADDRESS=0x48faeBA1046d91599bE693513b969F52a5d557c4
+VITE_CORE_ADDRESS=0x5603426365FC334E3eaF8c31c59BDA8ED223A127
+VITE_VAULT_ADDRESS=0x4f6D51B207F1eA053bF224b72316c4DAF170A40A
+VITE_USDSO_ADDRESS=0x9c32F3827A1a99f0cf9B213de8b53eC3d57bb171
+VITE_ORCHESTRATOR_ADDRESS=0xA50F7Fd25DdC86546202f7501873EB7E66175BD3
 VITE_TRACKER_URL=http://localhost:4000
 ```
 
@@ -173,7 +173,7 @@ yarn tracker:dev
 yarn contracts:compile
 
 # Deploy to Somnia testnet (already deployed — only needed for fresh deploys)
-yarn workspace @sentri/contracts hardhat run scripts/deploy.ts --network somnia
+yarn workspace @sentri/contracts hardhat run scripts/deploy.ts --network somniaTestnet
 ```
 
 ### Set agent IDs (post-deploy)
@@ -181,7 +181,7 @@ yarn workspace @sentri/contracts hardhat run scripts/deploy.ts --network somnia
 After obtaining agent IDs from [agents.somnia.network](https://agents.somnia.network), wire them into the orchestrator:
 
 ```bash
-yarn workspace @sentri/contracts hardhat run scripts/setAgentIds.ts --network somnia
+yarn workspace @sentri/contracts hardhat run scripts/setAgentIds.ts --network somniaTestnet
 ```
 
 Or call `AgentOrchestrator.setAgentIds(jsonApiAgentId, llmAgentId)` directly.
@@ -209,7 +209,7 @@ Higher utilization means more capital at risk, so the protocol rewards LPs accor
 ```
 payout = coverage × (threshold − triggerPrice) / threshold
 ```
-Example: $5,000 coverage, threshold $0.97, USDC at $0.90 → payout ≈ $360
+Example: $5,000 coverage, threshold $0.97, price at $0.90 → payout ≈ $360
 
 **Rug pull (binary):**
 ```
