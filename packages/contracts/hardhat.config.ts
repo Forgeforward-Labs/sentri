@@ -32,7 +32,7 @@ const config: HardhatUserConfig = {
   },
   etherscan: {
     apiKey: {
-      somniaTestnet: "JGC4TBB5G6XTD5P24EE8ZPT3JY7Y8519Z2", // Blockscout doesn't require a real key
+      somniaTestnet: process.env.EXPLORER_API_KEY ?? "abc",
     },
     customChains: [
       {
