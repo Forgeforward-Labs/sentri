@@ -46,6 +46,11 @@ export default function App() {
         <RainbowKitProvider theme={rkTheme} modalSize="compact">
           <Toaster position="bottom-right" theme="dark" richColors />
           <BrowserRouter>
+            <div className="w-full bg-amber-500/10 border-b border-amber-500/20 text-amber-400 text-xs text-center py-2 px-4">
+              <span className="font-semibold">Testnet only.</span>
+              {' '}This is a prototype running on Somnia Testnet. All tokens and positions have no real value. Do not use real funds.
+              {' '}1 USDso = 100,000 USDso coverage value for testing convenience.
+            </div>
             <Navbar />
             <Routes>
               <Route path="/" element={<HomePage />} />

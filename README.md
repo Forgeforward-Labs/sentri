@@ -2,6 +2,10 @@
 
 Sentri is an on-chain parametric insurance protocol built on the [Somnia Network](https://somnia.network). It lets users buy instant, trustless coverage against DeFi risks — stablecoin depegs and rug pulls — and pays out automatically when autonomous Somnia AI agents reach consensus that a trigger event occurred. No claim forms, no adjusters, no waiting period.
 
+**Live demo:** [sentriweb-production.up.railway.app](https://sentriweb-production.up.railway.app) · Somnia Testnet
+**Video demo:** [Watch on Google Drive](https://drive.google.com/file/d/19K7cmBaYHCqpHk3qs1r85MnhK7d3Qjqj/view?usp=sharing)
+**Architecture:** [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
+
 ---
 
 ## How It Works
@@ -60,7 +64,7 @@ All contracts are deployed and verified on **Somnia Testnet (chain ID 50312)**.
 | `InsuranceCore` | [`0x5603426365FC334E3eaF8c31c59BDA8ED223A127`](https://shannon-explorer.somnia.network/address/0x5603426365FC334E3eaF8c31c59BDA8ED223A127#code) | Products, positions, trigger initiation |
 | `ClaimProcessor` | [`0x81066a0d13e6C359360954516Ad63F6B1aFd638E`](https://shannon-explorer.somnia.network/address/0x81066a0d13e6C359360954516Ad63F6B1aFd638E#code) | Receives agent consensus; executes payouts |
 | `AgentOrchestrator` | [`0xA50F7Fd25DdC86546202f7501873EB7E66175BD3`](https://shannon-explorer.somnia.network/address/0xA50F7Fd25DdC86546202f7501873EB7E66175BD3#code) | Routes requests to Somnia Agent Platform |
-| `USDso` (testnet) | [`0x9c32F3827A1a99f0cf9B213de8b53eC3d57bb171`](https://shannon-explorer.somnia.network/address/0x9c32F3827A1a99f0cf9B213de8b53eC3d57bb171) | 18-decimal test token (1 USDso = $100,000) |
+| `USDso` (testnet) | [`0x9c32F3827A1a99f0cf9B213de8b53eC3d57bb171`](https://shannon-explorer.somnia.network/address/0x9c32F3827A1a99f0cf9B213de8b53eC3d57bb171) | Testnet payment token — 1 USDso = 100,000 USDso coverage value, so small amounts suffice for testing |
 
 **Deployer / owner:** `0xD7Fd52209711c94A3Fcc4f3aeB3668d2Df829254`
 
@@ -118,9 +122,9 @@ Hardhat workspace. Key contracts:
 
 ### Prerequisites
 
-- Node.js ≥ 18, Yarn ≥ 1.22
-- An RPC endpoint for Somnia Testnet (`https://dream-rpc.somnia.network`)
-- A funded testnet wallet (STT for gas, testnet USDC)
+- Node.js ≥ 18, Yarn 4.x (Berry)
+- An RPC endpoint for Somnia Testnet (`https://api.infra.testnet.somnia.network`)
+- A funded testnet wallet (STT for gas, testnet USDso)
 
 ### Install
 
@@ -141,9 +145,12 @@ USDSO_ADDRESS=0x9c32F3827A1a99f0cf9B213de8b53eC3d57bb171
 ```
 TRACKER_PRIVATE_KEY=0x...
 SOMNIA_HTTP_RPC_URL=https://api.infra.testnet.somnia.network
+SOMNIA_WS_RPC_URL=wss://api.infra.testnet.somnia.network/ws
+DATABASE_URL=postgresql://user:password@localhost:5432/sentri
 CORE_ADDRESS=0x5603426365FC334E3eaF8c31c59BDA8ED223A127
 VAULT_ADDRESS=0x4f6D51B207F1eA053bF224b72316c4DAF170A40A
 AGENT_ORCHESTRATOR_ADDRESS=0xA50F7Fd25DdC86546202f7501873EB7E66175BD3
+DEPLOY_BLOCK=405829190
 PORT=4000
 ```
 
@@ -185,6 +192,26 @@ yarn workspace @sentri/contracts hardhat run scripts/setAgentIds.ts --network so
 ```
 
 Or call `AgentOrchestrator.setAgentIds(jsonApiAgentId, llmAgentId)` directly.
+
+### Verify contracts (post-deploy)
+
+Add `EXPLORER_API_KEY` to `packages/contracts/.env`, then run one command per contract:
+
+```bash
+cd packages/contracts
+
+npx hardhat verify --network somniaTestnet \
+  <POLICY_VAULT_ADDRESS> "<USDSO_ADDRESS>"
+
+npx hardhat verify --network somniaTestnet \
+  <INSURANCE_CORE_ADDRESS> "<POLICY_VAULT_ADDRESS>"
+
+npx hardhat verify --network somniaTestnet \
+  <CLAIM_PROCESSOR_ADDRESS> "<INSURANCE_CORE_ADDRESS>" "<POLICY_VAULT_ADDRESS>"
+
+npx hardhat verify --network somniaTestnet \
+  <AGENT_ORCHESTRATOR_ADDRESS> "0x037Bb9C718F3f7fe5eCBDB0b600D607b52706776" "<INSURANCE_CORE_ADDRESS>" "<CLAIM_PROCESSOR_ADDRESS>"
+```
 
 ---
 

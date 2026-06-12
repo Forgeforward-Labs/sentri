@@ -101,9 +101,10 @@ async function bootstrap() {
             for (const p of updatedProducts) if (p) positionService.applyChainProduct(p);
             for (const p of updatedPositions) if (p) positionService.applyChainPosition(p);
 
-            // Re-read products affected by position changes so totalCommitted stays fresh
-            // (expiry/claim reduces product.totalCommitted on-chain but no product event fires)
-            if (changedPositionIds.length > 0) {
+            // Re-read products affected by any position activity so totalCommitted stays fresh.
+            // Covers both new positions (buyPosition increments totalCommitted) and
+            // status changes (expiry/claim decrements it) — no product event fires for either.
+            if (allPositionIds.length > 0) {
               const affectedProductIds = [
                 ...new Set(
                   updatedPositions
